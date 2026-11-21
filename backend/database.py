@@ -139,6 +139,7 @@ def init_db() -> None:
     _ensure_column(cur, "settings", "tenant_id", "TEXT DEFAULT 'default'")
     _ensure_column(cur, "messages", "feedback", "INTEGER DEFAULT 0")
     _ensure_column(cur, "knowledge_docs", "mode_scope", "TEXT DEFAULT 'all'")
+    _ensure_column(cur, "sessions", "human_active", "INTEGER DEFAULT 0")
 
     cur.execute("SELECT COUNT(*) FROM tenants")
     if cur.fetchone()[0] == 0:
@@ -153,6 +154,9 @@ def init_db() -> None:
         "groq_model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b"),
         "support_email": os.getenv("SUPPORT_EMAIL", "support@owfy.io"),
         "agent_mode": "hybrid",
+        "webhook_tickets_url": os.getenv("WEBHOOK_TICKETS_URL", ""),
+        "webhook_bookings_url": os.getenv("WEBHOOK_BOOKINGS_URL", ""),
+        "webhook_secret": os.getenv("WEBHOOK_SECRET", ""),
         "system_prompt": (
             "You are the AI Customer & Technical Support Specialist for {business_name}. "
             "Answer clearly, concisely, and accurately using the provided Business Knowledge Base and available tools. "
@@ -317,14 +321,38 @@ def ensure_session(
     existing = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
     if not existing:
         conn.execute(
-            """INSERT INTO sessions (id, visitor_name, visitor_email, status, tenant_id, created_at, updated_at)
-               VALUES (?, ?, ?, 'active', ?, ?, ?)""",
+            """INSERT INTO sessions (id, visitor_name, visitor_email, status, tenant_id, human_active, created_at, updated_at)
+               VALUES (?, ?, ?, 'active', ?, 0, ?, ?)""",
             (session_id, visitor_name, visitor_email, tenant_id, now, now),
         )
     else:
         conn.execute("UPDATE sessions SET updated_at = ?, tenant_id = ? WHERE id = ?", (now, tenant_id, session_id))
     conn.commit()
     conn.close()
+
+
+def get_session(session_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def set_session_human_takeover(session_id: str, active: bool) -> bool:
+    conn = get_conn()
+    now = utc_now()
+    cur = conn.cursor()
+    val = 1 if active else 0
+    cur.execute(
+        """UPDATE sessions
+           SET human_active = ?, status = CASE WHEN ? = 1 THEN 'human_takeover' ELSE 'active' END, updated_at = ?
+           WHERE id = ?""",
+        (val, val, now, session_id),
+    )
+    updated = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return updated
 
 
 def add_message(

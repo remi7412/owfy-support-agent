@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 from typing import Dict, Optional
@@ -12,6 +13,7 @@ from backend.emailer import send_escalation_email
 from backend.ingest import extract_pdf_content, fetch_website_content
 from backend.llm import generate_support_reply
 from backend.rag import retrieve_relevant_chunks
+from backend.webhooks import dispatch_webhook
 from backend.security import (
     check_rate_limit,
     create_access_token,
@@ -137,6 +139,22 @@ class SettingsPayload(BaseModel):
     support_email: Optional[str] = None
     agent_mode: Optional[str] = None
     system_prompt: Optional[str] = None
+    webhook_tickets_url: Optional[str] = None
+    webhook_bookings_url: Optional[str] = None
+    webhook_secret: Optional[str] = None
+
+
+class TakeoverPayload(BaseModel):
+    active: bool
+
+
+class AdminReplyPayload(BaseModel):
+    message: str = Field(..., min_length=1)
+
+
+class WebhookTestPayload(BaseModel):
+    url: str = Field(..., min_length=4)
+    secret: Optional[str] = ""
 
 
 # --- Frontend Routes ---
@@ -206,7 +224,12 @@ def read_public_settings(tenant: Optional[str] = "default"):
 
 @app.get("/api/chat/history/{session_id}")
 def get_public_session_history(session_id: str):
-    return {"session_id": session_id, "messages": db.get_session_messages(session_id, limit=50)}
+    session = db.get_session(session_id)
+    return {
+        "session_id": session_id,
+        "human_active": bool(session.get("human_active")) if session else False,
+        "messages": db.get_session_messages(session_id, limit=50),
+    }
 
 
 @app.post("/api/chat")
@@ -214,6 +237,21 @@ async def chat(req: ChatRequest, request: Request):
     check_rate_limit(request, "chat", max_requests=20, window_sec=60)
     tenant_slug = req.tenant_id or "default"
     db.ensure_session(req.session_id, req.visitor_name or "Guest", req.visitor_email or "", tenant_id=tenant_slug)
+
+    session = db.get_session(req.session_id)
+    if session and session.get("human_active"):
+        db.add_message(req.session_id, "user", req.message, tenant_id=tenant_slug)
+        return {
+            "session_id": req.session_id,
+            "message_id": None,
+            "reply": "A live specialist has joined your chat session. Your message has been delivered directly to them.",
+            "sources": [],
+            "suggest_escalation": False,
+            "action_card": None,
+            "human_active": True,
+            "tenant_id": tenant_slug,
+        }
+
     history = db.get_session_messages(req.session_id, limit=12)
     settings = db.get_settings()
 
@@ -265,7 +303,7 @@ def submit_feedback(payload: FeedbackRequest):
 
 
 @app.post("/api/bookings")
-def create_public_booking(payload: BookingPayload, request: Request):
+async def create_public_booking(payload: BookingPayload, request: Request):
     check_rate_limit(request, "bookings", max_requests=10, window_sec=60)
     tenant_slug = payload.tenant_id or "default"
     db.ensure_session(payload.session_id, payload.customer_name, payload.customer_contact, tenant_id=tenant_slug)
@@ -280,6 +318,13 @@ def create_public_booking(payload: BookingPayload, request: Request):
         notes=payload.notes or "",
         tenant_id=tenant_slug,
     )
+
+    settings = db.get_settings()
+    w_url = settings.get("webhook_bookings_url", "").strip()
+    w_sec = settings.get("webhook_secret", "").strip()
+    if w_url:
+        asyncio.create_task(dispatch_webhook("booking.created", booking, w_url, w_sec))
+
     return {"booking": booking}
 
 
@@ -293,7 +338,7 @@ def lookup_public_tracking(tracking_code: str, request: Request, tenant: Optiona
 
 
 @app.post("/api/tickets")
-def submit_ticket(payload: TicketPayload, request: Request):
+async def submit_ticket(payload: TicketPayload, request: Request):
     check_rate_limit(request, "tickets", max_requests=5, window_sec=60)
     tenant_slug = payload.tenant_id or "default"
     db.ensure_session(payload.session_id, payload.customer_name, payload.customer_email, tenant_id=tenant_slug)
@@ -339,6 +384,12 @@ def submit_ticket(payload: TicketPayload, request: Request):
     conn.commit()
     updated = dict(conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket["id"],)).fetchone())
     conn.close()
+
+    w_url = settings.get("webhook_tickets_url", "").strip()
+    w_sec = settings.get("webhook_secret", "").strip()
+    if w_url:
+        asyncio.create_task(dispatch_webhook("ticket.created", updated, w_url, w_sec))
+
     return {"ticket": updated}
 
 
@@ -375,7 +426,55 @@ def get_sessions(tenant_id: Optional[str] = None, _: str = Depends(require_admin
 
 @app.get("/api/sessions/{session_id}")
 def get_session_history(session_id: str, _: str = Depends(require_admin)):
-    return {"session_id": session_id, "messages": db.get_session_messages(session_id, limit=100)}
+    session = db.get_session(session_id)
+    return {
+        "session_id": session_id,
+        "session": session,
+        "messages": db.get_session_messages(session_id, limit=100),
+    }
+
+
+@app.post("/api/sessions/{session_id}/takeover")
+def toggle_takeover(session_id: str, payload: TakeoverPayload, _: str = Depends(require_admin)):
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    db.set_session_human_takeover(session_id, payload.active)
+    updated_session = db.get_session(session_id)
+    return {"session_id": session_id, "human_active": bool(payload.active), "session": updated_session}
+
+
+@app.post("/api/sessions/{session_id}/reply")
+def admin_reply(session_id: str, payload: AdminReplyPayload, _: str = Depends(require_admin)):
+    session = db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    tenant_slug = session.get("tenant_id") or "default"
+    msg_id = db.add_message(
+        session_id=session_id,
+        role="assistant",
+        content=payload.message.strip(),
+        sources=[{"title": "Live Support Specialist", "category": "Human Specialist"}],
+        escalated=False,
+        tenant_id=tenant_slug,
+    )
+    return {
+        "session_id": session_id,
+        "message_id": msg_id,
+        "reply": payload.message.strip(),
+        "role": "assistant",
+    }
+
+
+@app.post("/api/webhooks/test")
+async def test_webhook(payload: WebhookTestPayload, _: str = Depends(require_admin)):
+    success = await dispatch_webhook(
+        event="test.ping",
+        data={"message": "Test ping from Owfy Support Platform", "status": "operational"},
+        webhook_url=payload.url,
+        secret=payload.secret,
+    )
+    return {"success": success, "url": payload.url}
 
 
 @app.get("/api/knowledge")

@@ -425,10 +425,28 @@
       applyModeUI();
     }
 
+    const renderedMsgIds = new Set();
+    let isHumanActive = false;
+
+    function updateTakeoverBanner(active) {
+      const statusPill = document.getElementById("mode-pill");
+      if (active) {
+        statusPill.textContent = "Live Specialist Active";
+        statusPill.style.background = "#dcfce7";
+        statusPill.style.color = "#166534";
+      } else {
+        applyModeUI();
+      }
+    }
+
     async function loadHistory() {
       const res = await fetch(`/api/chat/history/${sessionId}`);
       const data = await res.json();
       chatBox.innerHTML = "";
+      renderedMsgIds.clear();
+      isHumanActive = Boolean(data.human_active);
+      updateTakeoverBanner(isHumanActive);
+
       if (!data.messages.length) {
         const greetings = {
           it_support: "Hello! I'm your **IT Support Specialist**. Share your device, OS, or error message—or track an existing IT ticket like `IT-2045`.",
@@ -438,8 +456,34 @@
         appendMessage("assistant", greetings[activeMode] || greetings.hybrid, [], false, null, false, null);
         return;
       }
-      data.messages.forEach(m => appendMessage(m.role, m.content, m.sources || [], m.escalated, null, false, m.id, m.feedback));
+      data.messages.forEach(m => {
+        if (m.id) renderedMsgIds.add(m.id);
+        appendMessage(m.role, m.content, m.sources || [], m.escalated, null, false, m.id, m.feedback);
+      });
     }
+
+    async function pollHistory() {
+      try {
+        const res = await fetch(`/api/chat/history/${sessionId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const active = Boolean(data.human_active);
+        if (active !== isHumanActive) {
+          isHumanActive = active;
+          updateTakeoverBanner(isHumanActive);
+        }
+        if (data.messages && data.messages.length) {
+          data.messages.forEach(m => {
+            if (m.id && !renderedMsgIds.has(m.id)) {
+              renderedMsgIds.add(m.id);
+              appendMessage(m.role, m.content, m.sources || [], m.escalated, null, true, m.id, m.feedback);
+            }
+          });
+        }
+      } catch (e) {}
+    }
+
+    setInterval(pollHistory, 3000);
 
     async function sendFeedback(msgId, rating, btnEl, wrapEl) {
       await fetch("/api/feedback", {
@@ -547,6 +591,11 @@
         if (!res.ok) {
           appendMessage("assistant", data.detail || "Request blocked. Please try again.");
         } else {
+          if (data.message_id) renderedMsgIds.add(data.message_id);
+          if (data.human_active !== undefined) {
+            isHumanActive = Boolean(data.human_active);
+            updateTakeoverBanner(isHumanActive);
+          }
           appendMessage("assistant", data.reply, data.sources || [], data.suggest_escalation, data.action_card, true, data.message_id);
         }
       } catch (err) {

@@ -176,12 +176,30 @@
 
     <div id="tab-sessions" class="section grid-2">
       <div class="card" style="padding:0;overflow:hidden;">
-        <div style="padding:12px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;">Sessions</div>
+        <div style="padding:12px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;display:flex;justify-content:space-between;align-items:center;">
+          <span>Sessions</span>
+          <button class="btn" style="padding:2px 8px;font-size:11px;" onclick="refreshAll()">Refresh</button>
+        </div>
         <div id="sessions-list"></div>
       </div>
-      <div class="card">
-        <div style="font-weight:600;font-size:13px;margin-bottom:12px;">Conversation Memory Transcript</div>
-        <div id="session-transcript" style="color:var(--muted);font-size:13px;">Select a session to inspect memory.</div>
+      <div class="card" style="display:flex;flex-direction:column;min-height:500px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--border);">
+          <div>
+            <span style="font-weight:600;font-size:13px;" id="selected-session-title">Conversation Memory Transcript</span>
+            <div id="takeover-status-badge" style="display:inline-block;margin-left:8px;font-size:11px;padding:2px 6px;border-radius:4px;background:var(--soft);color:var(--muted);">Select Session</div>
+          </div>
+          <div id="takeover-actions" style="display:none;gap:6px;">
+            <button class="btn" id="btn-toggle-takeover" onclick="toggleTakeover()">Take Over Chat</button>
+          </div>
+        </div>
+        <div id="session-transcript" style="color:var(--muted);font-size:13px;flex:1;overflow-y:auto;max-height:360px;margin-bottom:12px;">Select a session to inspect memory.</div>
+        <div id="takeover-reply-bar" style="display:none;border-top:1px solid var(--border);padding-top:12px;">
+          <form onsubmit="sendAdminReply(event)" style="display:flex;gap:8px;">
+            <input id="admin-reply-input" placeholder="Type live reply to customer..." style="flex:1;" required />
+            <button class="btn btn-primary" type="submit" id="btn-admin-reply">Send Reply</button>
+          </form>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px;">Replies appear immediately in the customer's chat without AI interference.</div>
+        </div>
       </div>
     </div>
 
@@ -364,7 +382,17 @@
         </div>
         <div><label>Support Escalation Email</label><input id="set-email" type="email" /></div>
         <div><label>System Prompt ({business_name} supported)</label><textarea id="set-prompt" rows="5"></textarea></div>
-        <button class="btn btn-primary" type="submit">Save Settings</button>
+
+        <h2 style="font-size:15px;margin-top:16px;">Automations &amp; Webhooks (n8n / Slack / WhatsApp)</h2>
+        <div><label>Tickets Webhook URL (POST event on ticket escalation)</label><input id="set-wh-tickets" placeholder="https://n8n.yourdomain.com/webhook/tickets" /></div>
+        <div><label>Bookings Webhook URL (POST event on new booking / call)</label><input id="set-wh-bookings" placeholder="https://n8n.yourdomain.com/webhook/bookings" /></div>
+        <div><label>Webhook HMAC Secret (Optional signature verification)</label><input id="set-wh-secret" placeholder="owfy_wh_secret_key" /></div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn" type="button" onclick="testWebhookPing()">Test Webhook Ping</button>
+          <span id="wh-test-status" style="font-size:12px;color:var(--muted);"></span>
+        </div>
+
+        <button class="btn btn-primary" type="submit" style="margin-top:8px;">Save Settings</button>
         <div id="settings-msg" style="font-size:12px;color:var(--muted);"></div>
       </form>
     </div>
@@ -496,9 +524,12 @@
         `).join("");
 
         document.getElementById("sessions-list").innerHTML = sessions.map(s => `
-          <div class="session-item" onclick="loadTranscript('${s.id}')">
-            <strong>${s.visitor_name || 'Guest'}</strong> <span style="color:var(--muted);">(${s.message_count} msgs)</span><br>
-            <span style="font-size:11px;color:var(--muted);">${s.id} · ${s.status} · <em>${s.tenant_id || 'default'}</em></span>
+          <div class="session-item ${currentSessionId === s.id ? 'active' : ''}" onclick="selectSession('${s.id}')" style="cursor:pointer;padding:10px 14px;border-bottom:1px solid var(--border);">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <strong>${s.visitor_name || 'Guest'}</strong>
+              ${s.human_active ? '<span style="font-size:10px;background:#dcfce7;color:#166534;padding:1px 5px;border-radius:3px;font-weight:600;">LIVE TAKEOVER</span>' : ''}
+            </div>
+            <span style="font-size:11px;color:var(--muted);">${s.id} · ${s.status} · <em>${s.tenant_id || 'default'}</em> · (${s.message_count || 0} msgs)</span>
           </div>
         `).join("") || `<div style="padding:12px;color:var(--muted);font-size:13px;">No sessions yet.</div>`;
 
@@ -538,6 +569,9 @@
         document.getElementById("set-model").value = settings.groq_model || "openai/gpt-oss-20b";
         document.getElementById("set-email").value = settings.support_email || "";
         document.getElementById("set-prompt").value = settings.system_prompt || "";
+        document.getElementById("set-wh-tickets").value = settings.webhook_tickets_url || "";
+        document.getElementById("set-wh-bookings").value = settings.webhook_bookings_url || "";
+        document.getElementById("set-wh-secret").value = settings.webhook_secret || "";
       } catch (e) {}
     }
 
@@ -546,12 +580,80 @@
       refreshAll();
     }
 
+    let currentSessionId = null;
+
+    async function selectSession(sessionId) {
+      currentSessionId = sessionId;
+      document.getElementById("selected-session-title").textContent = `Session: ${sessionId}`;
+      document.getElementById("takeover-actions").style.display = "flex";
+      document.getElementById("takeover-reply-bar").style.display = "block";
+      await loadTranscript(sessionId);
+    }
+
     async function loadTranscript(sessionId) {
+      currentSessionId = sessionId;
       const res = await apiFetch(`/api/sessions/${sessionId}`);
       const data = await res.json();
+      const session = data.session || {};
+      const isLive = Boolean(session.human_active);
+
+      const badge = document.getElementById("takeover-status-badge");
+      const btn = document.getElementById("btn-toggle-takeover");
+
+      if (isLive) {
+        badge.textContent = "LIVE TAKEOVER ACTIVE";
+        badge.style.background = "#dcfce7";
+        badge.style.color = "#166534";
+        btn.textContent = "Release Chat to AI";
+        btn.classList.add("btn-primary");
+      } else {
+        badge.textContent = "AI Mode Active";
+        badge.style.background = "var(--soft)";
+        badge.style.color = "var(--muted)";
+        btn.textContent = "Take Over Chat";
+        btn.classList.remove("btn-primary");
+      }
+
       document.getElementById("session-transcript").innerHTML = data.messages.map(m => `
         <div class="msg-row ${m.role}"><strong>${m.role.toUpperCase()}</strong>: ${m.content}</div>
       `).join("") || "No messages.";
+    }
+
+    async function toggleTakeover() {
+      if (!currentSessionId) return;
+      const badge = document.getElementById("takeover-status-badge");
+      const currentlyLive = badge.textContent.includes("LIVE");
+      const nextState = !currentlyLive;
+
+      await apiFetch(`/api/sessions/${currentSessionId}/takeover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: nextState })
+      });
+      await loadTranscript(currentSessionId);
+      refreshAll();
+    }
+
+    async function sendAdminReply(e) {
+      e.preventDefault();
+      if (!currentSessionId) return;
+      const input = document.getElementById("admin-reply-input");
+      const msg = input.value.trim();
+      if (!msg) return;
+
+      const btn = document.getElementById("btn-admin-reply");
+      btn.disabled = true;
+      try {
+        await apiFetch(`/api/sessions/${currentSessionId}/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: msg })
+        });
+        input.value = "";
+        await loadTranscript(currentSessionId);
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     async function updateTicket(id, status) {
@@ -721,15 +823,6 @@
         alert(err.detail || "Could not delete tenant");
       }
     }
-          fileInput.value = "";
-          refreshAll();
-        }
-      } catch (err) {
-        statusEl.textContent = "Error: " + err.message;
-      } finally {
-        btn.disabled = false;
-      }
-    }
 
     async function testRag() {
       const q = document.getElementById("kb-test-q").value.trim();
@@ -739,6 +832,37 @@
       document.getElementById("rag-preview").innerHTML = data.results.length
         ? data.results.map(r => `• <strong>${r.title}</strong> (score: ${r.score}): ${r.content.slice(0,110)}...`).join("<br>")
         : "No matching chunks found.";
+    }
+
+    async function testWebhookPing() {
+      const url = document.getElementById("set-wh-tickets").value.trim() || document.getElementById("set-wh-bookings").value.trim();
+      const secret = document.getElementById("set-wh-secret").value.trim();
+      const statusEl = document.getElementById("wh-test-status");
+      if (!url) {
+        statusEl.textContent = "Please enter a Tickets or Bookings Webhook URL first.";
+        statusEl.style.color = "#b91c1c";
+        return;
+      }
+      statusEl.textContent = "Sending test ping...";
+      statusEl.style.color = "var(--muted)";
+      try {
+        const res = await apiFetch("/api/webhooks/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, secret })
+        });
+        const data = await res.json();
+        if (data.success) {
+          statusEl.textContent = "Webhook test ping succeeded (HTTP 2xx).";
+          statusEl.style.color = "#166534";
+        } else {
+          statusEl.textContent = "Webhook endpoint unreachable or returned error.";
+          statusEl.style.color = "#b91c1c";
+        }
+      } catch (err) {
+        statusEl.textContent = "Error testing webhook: " + err.message;
+        statusEl.style.color = "#b91c1c";
+      }
     }
 
     async function saveSettings(e) {
@@ -751,7 +875,10 @@
           agent_mode: document.getElementById("set-mode").value,
           groq_model: document.getElementById("set-model").value,
           support_email: document.getElementById("set-email").value,
-          system_prompt: document.getElementById("set-prompt").value
+          system_prompt: document.getElementById("set-prompt").value,
+          webhook_tickets_url: document.getElementById("set-wh-tickets").value.trim(),
+          webhook_bookings_url: document.getElementById("set-wh-bookings").value.trim(),
+          webhook_secret: document.getElementById("set-wh-secret").value.trim()
         })
       });
       document.getElementById("settings-msg").textContent = "Settings saved.";
