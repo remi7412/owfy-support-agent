@@ -243,6 +243,7 @@
   <script>
     const urlParams = new URLSearchParams(window.location.search);
     const paramMode = urlParams.get("mode");
+    const tenantSlug = urlParams.get("tenant") || "default";
     let activeMode = ["it_support", "business_booking", "hybrid"].includes(paramMode) ? paramMode : "hybrid";
 
     let sessionId = localStorage.getItem("owfy_session_id");
@@ -412,12 +413,15 @@
     }
 
     async function loadSettings() {
-      const res = await fetch("/api/public/settings");
+      const res = await fetch(`/api/public/settings?tenant=${encodeURIComponent(tenantSlug)}`);
       const data = await res.json();
       const name = data.business_name || "Owfy";
       if (!paramMode && data.agent_mode) activeMode = data.agent_mode;
       document.getElementById("brand-title").textContent = `${name} Support`;
       document.getElementById("brand-mark").textContent = name[0].toUpperCase();
+      if (data.widget_color) {
+        document.getElementById("brand-mark").style.background = data.widget_color;
+      }
       applyModeUI();
     }
 
@@ -537,7 +541,7 @@
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, message: text, mode: activeMode })
+          body: JSON.stringify({ session_id: sessionId, message: text, mode: activeMode, tenant_id: tenantSlug })
         });
         const data = await res.json();
         if (!res.ok) {
@@ -605,7 +609,8 @@
           customer_name: document.getElementById("t-name").value,
           customer_email: document.getElementById("t-email").value,
           subject: document.getElementById("t-subject").value,
-          summary: document.getElementById("t-summary").value
+          summary: document.getElementById("t-summary").value,
+          tenant_id: tenantSlug
         })
       });
       const data = await res.json();
@@ -625,7 +630,8 @@
           service_type: document.getElementById("b-service").value,
           preferred_date: document.getElementById("b-date").value,
           preferred_time: document.getElementById("b-time").value,
-          call_mode: document.getElementById("b-mode").value
+          call_mode: document.getElementById("b-mode").value,
+          tenant_id: tenantSlug
         })
       });
       const data = await res.json();
@@ -640,7 +646,7 @@
     async function submitTrack(e) {
       e.preventDefault();
       const code = document.getElementById("tr-code").value.trim();
-      const res = await fetch(`/api/track/${encodeURIComponent(code)}`);
+      const res = await fetch(`/api/track/${encodeURIComponent(code)}?tenant=${encodeURIComponent(tenantSlug)}`);
       const data = await res.json();
       closeModal("track-modal");
       if (res.ok) {

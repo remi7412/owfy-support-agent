@@ -62,10 +62,10 @@ TOOLS = [
 ]
 
 
-def _execute_tool(name: str, args: Dict[str, Any], session_id: str) -> Tuple[str, Optional[Dict[str, Any]]]:
+def _execute_tool(name: str, args: Dict[str, Any], session_id: str, tenant_id: str = "default") -> Tuple[str, Optional[Dict[str, Any]]]:
     if name == "lookup_tracking":
         code = args.get("tracking_code", "")
-        item = db.get_trackable_by_code(code)
+        item = db.get_trackable_by_code(code, tenant_id=tenant_id)
         if not item:
             return json.dumps({"found": False, "tracking_code": code}), None
         return json.dumps({"found": True, "item": item}), {"type": "tracking", "data": item}
@@ -80,6 +80,7 @@ def _execute_tool(name: str, args: Dict[str, Any], session_id: str) -> Tuple[str
             preferred_time=args.get("preferred_time", "Morning"),
             call_mode=args.get("call_mode", "voice_callback"),
             notes=args.get("notes", ""),
+            tenant_id=tenant_id,
         )
         return json.dumps({"booked": True, "booking": booking}), {"type": "booking", "data": booking}
 
@@ -93,6 +94,7 @@ async def generate_support_reply(
     retrieved_chunks: List[Dict[str, Any]],
     settings: Dict[str, str],
     mode_override: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> Tuple[str, bool, Optional[Dict[str, Any]]]:
     api_key = os.getenv("GROQ_API_KEY", "").strip()
     business_name = settings.get("business_name", "Owfy")
@@ -152,7 +154,7 @@ async def generate_support_reply(
                 for tc in choice_msg["tool_calls"]:
                     fn_name = tc["function"]["name"]
                     fn_args = json.loads(tc["function"].get("arguments") or "{}")
-                    result_str, card = _execute_tool(fn_name, fn_args, session_id)
+                    result_str, card = _execute_tool(fn_name, fn_args, session_id, tenant_id=tenant_id)
                     if card:
                         action_card = card
                     messages.append({

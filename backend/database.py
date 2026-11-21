@@ -116,9 +116,37 @@ def init_db() -> None:
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tenants (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT UNIQUE NOT NULL,
+        name TEXT NOT NULL,
+        business_mode TEXT DEFAULT 'hybrid',
+        support_email TEXT DEFAULT '',
+        system_prompt TEXT DEFAULT '',
+        widget_color TEXT DEFAULT '#141413',
+        created_at TEXT NOT NULL
+    )
+    """)
+
     # Safe migrations for existing databases
+    _ensure_column(cur, "sessions", "tenant_id", "TEXT DEFAULT 'default'")
+    _ensure_column(cur, "messages", "tenant_id", "TEXT DEFAULT 'default'")
+    _ensure_column(cur, "knowledge_docs", "tenant_id", "TEXT DEFAULT 'default'")
+    _ensure_column(cur, "tickets", "tenant_id", "TEXT DEFAULT 'default'")
+    _ensure_column(cur, "bookings", "tenant_id", "TEXT DEFAULT 'default'")
+    _ensure_column(cur, "trackables", "tenant_id", "TEXT DEFAULT 'default'")
+    _ensure_column(cur, "settings", "tenant_id", "TEXT DEFAULT 'default'")
     _ensure_column(cur, "messages", "feedback", "INTEGER DEFAULT 0")
     _ensure_column(cur, "knowledge_docs", "mode_scope", "TEXT DEFAULT 'all'")
+
+    cur.execute("SELECT COUNT(*) FROM tenants")
+    if cur.fetchone()[0] == 0:
+        cur.execute(
+            """INSERT INTO tenants (slug, name, business_mode, support_email, system_prompt, widget_color, created_at)
+               VALUES ('default', 'Owfy Default', 'hybrid', ?, '', '#141413', ?)""",
+            (os.getenv("SUPPORT_EMAIL", "support@owfy.io"), utc_now()),
+        )
 
     default_settings = {
         "business_name": "Owfy",
@@ -201,6 +229,62 @@ def init_db() -> None:
     conn.close()
 
 
+# --- Tenants ---
+def list_tenants() -> List[Dict[str, Any]]:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM tenants ORDER BY id ASC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_tenant(slug_or_id: str) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    val = str(slug_or_id).strip()
+    row = conn.execute("SELECT * FROM tenants WHERE slug = ?", (val,)).fetchone()
+    if not row and val.isdigit():
+        row = conn.execute("SELECT * FROM tenants WHERE id = ?", (int(val),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def upsert_tenant(
+    slug: str,
+    name: str,
+    business_mode: str = "hybrid",
+    support_email: str = "",
+    system_prompt: str = "",
+    widget_color: str = "#141413",
+) -> Dict[str, Any]:
+    conn = get_conn()
+    now = utc_now()
+    clean_slug = slug.strip().lower().replace(" ", "-")
+    conn.execute(
+        """INSERT INTO tenants (slug, name, business_mode, support_email, system_prompt, widget_color, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(slug) DO UPDATE SET
+               name = excluded.name,
+               business_mode = excluded.business_mode,
+               support_email = excluded.support_email,
+               system_prompt = excluded.system_prompt,
+               widget_color = excluded.widget_color""",
+        (clean_slug, name.strip(), business_mode, support_email.strip(), system_prompt.strip(), widget_color.strip() or "#141413", now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM tenants WHERE slug = ?", (clean_slug,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def delete_tenant(tenant_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM tenants WHERE id = ? AND slug != 'default'", (tenant_id,))
+    deleted = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
+
 # --- Settings ---
 def get_settings() -> Dict[str, str]:
     conn = get_conn()
@@ -222,17 +306,23 @@ def update_settings(updates: Dict[str, str]) -> Dict[str, str]:
 
 
 # --- Sessions & Memory ---
-def ensure_session(session_id: str, visitor_name: str = "Guest", visitor_email: str = "") -> None:
+def ensure_session(
+    session_id: str,
+    visitor_name: str = "Guest",
+    visitor_email: str = "",
+    tenant_id: str = "default",
+) -> None:
     conn = get_conn()
     now = utc_now()
     existing = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
     if not existing:
         conn.execute(
-            "INSERT INTO sessions (id, visitor_name, visitor_email, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)",
-            (session_id, visitor_name, visitor_email, now, now),
+            """INSERT INTO sessions (id, visitor_name, visitor_email, status, tenant_id, created_at, updated_at)
+               VALUES (?, ?, ?, 'active', ?, ?, ?)""",
+            (session_id, visitor_name, visitor_email, tenant_id, now, now),
         )
     else:
-        conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
+        conn.execute("UPDATE sessions SET updated_at = ?, tenant_id = ? WHERE id = ?", (now, tenant_id, session_id))
     conn.commit()
     conn.close()
 
@@ -243,13 +333,15 @@ def add_message(
     content: str,
     sources: Optional[List[Dict[str, Any]]] = None,
     escalated: bool = False,
+    tenant_id: str = "default",
 ) -> int:
     conn = get_conn()
     now = utc_now()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO messages (session_id, role, content, sources_json, escalated, feedback, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
-        (session_id, role, content, json.dumps(sources or []), 1 if escalated else 0, now),
+        """INSERT INTO messages (session_id, role, content, sources_json, escalated, feedback, tenant_id, created_at)
+           VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
+        (session_id, role, content, json.dumps(sources or []), 1 if escalated else 0, tenant_id, now),
     )
     conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id))
     msg_id = cur.lastrowid
@@ -268,10 +360,14 @@ def set_message_feedback(msg_id: int, rating: int) -> bool:
     return ok
 
 
-def get_feedback_stats() -> Dict[str, int]:
+def get_feedback_stats(tenant_id: Optional[str] = None) -> Dict[str, int]:
     conn = get_conn()
-    up = conn.execute("SELECT COUNT(*) FROM messages WHERE feedback = 1").fetchone()[0]
-    down = conn.execute("SELECT COUNT(*) FROM messages WHERE feedback = -1").fetchone()[0]
+    if tenant_id:
+        up = conn.execute("SELECT COUNT(*) FROM messages WHERE feedback = 1 AND tenant_id = ?", (tenant_id,)).fetchone()[0]
+        down = conn.execute("SELECT COUNT(*) FROM messages WHERE feedback = -1 AND tenant_id = ?", (tenant_id,)).fetchone()[0]
+    else:
+        up = conn.execute("SELECT COUNT(*) FROM messages WHERE feedback = 1").fetchone()[0]
+        down = conn.execute("SELECT COUNT(*) FROM messages WHERE feedback = -1").fetchone()[0]
     conn.close()
     total = up + down
     pct = round((up / total) * 100) if total else 100
@@ -281,7 +377,8 @@ def get_feedback_stats() -> Dict[str, int]:
 def get_session_messages(session_id: str, limit: int = 20) -> List[Dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
-        "SELECT id, session_id, role, content, sources_json, escalated, feedback, created_at FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+        """SELECT id, session_id, role, content, sources_json, escalated, feedback, tenant_id, created_at
+           FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT ?""",
         (session_id, limit),
     ).fetchall()
     conn.close()
@@ -295,46 +392,68 @@ def get_session_messages(session_id: str, limit: int = 20) -> List[Dict[str, Any
             "sources": json.loads(r["sources_json"] or "[]"),
             "escalated": bool(r["escalated"]),
             "feedback": r["feedback"],
+            "tenant_id": r["tenant_id"] if "tenant_id" in r.keys() else "default",
             "created_at": r["created_at"],
         })
     return result
 
 
-def list_sessions() -> List[Dict[str, Any]]:
+def list_sessions(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
-    rows = conn.execute("""
-        SELECT s.*, COUNT(m.id) AS message_count,
-               MAX(m.content) AS last_message
-        FROM sessions s
-        LEFT JOIN messages m ON s.id = m.session_id
-        GROUP BY s.id
-        ORDER BY s.updated_at DESC
-    """).fetchall()
+    if tenant_id:
+        rows = conn.execute("""
+            SELECT s.*, COUNT(m.id) AS message_count,
+                   MAX(m.content) AS last_message
+            FROM sessions s
+            LEFT JOIN messages m ON s.id = m.session_id
+            WHERE s.tenant_id = ?
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+        """, (tenant_id,)).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT s.*, COUNT(m.id) AS message_count,
+                   MAX(m.content) AS last_message
+            FROM sessions s
+            LEFT JOIN messages m ON s.id = m.session_id
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+        """).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
 # --- Knowledge Base ---
-def list_knowledge_docs(mode_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_knowledge_docs(mode_filter: Optional[str] = None, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
+    clauses = []
+    params = []
     if mode_filter and mode_filter in ("it_support", "business_booking"):
-        rows = conn.execute(
-            "SELECT * FROM knowledge_docs WHERE mode_scope IN ('all', ?) ORDER BY id DESC",
-            (mode_filter,),
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM knowledge_docs ORDER BY id DESC").fetchall()
+        clauses.append("mode_scope IN ('all', ?)")
+        params.append(mode_filter)
+    if tenant_id:
+        clauses.append("tenant_id IN ('default', ?)")
+        params.append(tenant_id)
+    where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(f"SELECT * FROM knowledge_docs {where_sql} ORDER BY id DESC", tuple(params)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def add_knowledge_doc(title: str, category: str, content: str, mode_scope: str = "all") -> Dict[str, Any]:
+def add_knowledge_doc(
+    title: str,
+    category: str,
+    content: str,
+    mode_scope: str = "all",
+    tenant_id: str = "default",
+) -> Dict[str, Any]:
     conn = get_conn()
     now = utc_now()
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO knowledge_docs (title, category, mode_scope, content, updated_at) VALUES (?, ?, ?, ?, ?)",
-        (title, category, mode_scope, content, now),
+        """INSERT INTO knowledge_docs (title, category, mode_scope, content, tenant_id, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (title, category, mode_scope, content, tenant_id, now),
     )
     doc_id = cur.lastrowid
     conn.commit()
@@ -343,12 +462,21 @@ def add_knowledge_doc(title: str, category: str, content: str, mode_scope: str =
     return dict(row)
 
 
-def update_knowledge_doc(doc_id: int, title: str, category: str, content: str, mode_scope: str = "all") -> Optional[Dict[str, Any]]:
+def update_knowledge_doc(
+    doc_id: int,
+    title: str,
+    category: str,
+    content: str,
+    mode_scope: str = "all",
+    tenant_id: str = "default",
+) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     now = utc_now()
     conn.execute(
-        "UPDATE knowledge_docs SET title = ?, category = ?, mode_scope = ?, content = ?, updated_at = ? WHERE id = ?",
-        (title, category, mode_scope, content, now, doc_id),
+        """UPDATE knowledge_docs
+           SET title = ?, category = ?, mode_scope = ?, content = ?, tenant_id = ?, updated_at = ?
+           WHERE id = ?""",
+        (title, category, mode_scope, content, tenant_id, now, doc_id),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM knowledge_docs WHERE id = ?", (doc_id,)).fetchone()
@@ -375,17 +503,20 @@ def create_ticket(
     summary: str,
     email_sent: bool,
     email_note: str,
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     conn = get_conn()
     now = utc_now()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO tickets (session_id, customer_name, customer_email, subject, summary, status, email_sent, email_note, created_at)
-           VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?)""",
-        (session_id, customer_name, customer_email, subject, summary, 1 if email_sent else 0, email_note, now),
+        """INSERT INTO tickets (session_id, customer_name, customer_email, subject, summary, status, email_sent, email_note, tenant_id, created_at)
+           VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)""",
+        (session_id, customer_name, customer_email, subject, summary, 1 if email_sent else 0, email_note, tenant_id, now),
     )
-    conn.execute("UPDATE sessions SET status = 'escalated', visitor_name = ?, visitor_email = ? WHERE id = ?",
-                 (customer_name, customer_email, session_id))
+    conn.execute(
+        "UPDATE sessions SET status = 'escalated', visitor_name = ?, visitor_email = ?, tenant_id = ? WHERE id = ?",
+        (customer_name, customer_email, tenant_id, session_id),
+    )
     ticket_id = cur.lastrowid
     conn.commit()
     row = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
@@ -393,9 +524,12 @@ def create_ticket(
     return dict(row)
 
 
-def list_tickets() -> List[Dict[str, Any]]:
+def list_tickets(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM tickets ORDER BY id DESC").fetchall()
+    if tenant_id:
+        rows = conn.execute("SELECT * FROM tickets WHERE tenant_id = ? ORDER BY id DESC", (tenant_id,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM tickets ORDER BY id DESC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -429,14 +563,15 @@ def create_booking(
     preferred_time: str,
     call_mode: str = "voice_callback",
     notes: str = "",
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     conn = get_conn()
     now = utc_now()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO bookings (session_id, customer_name, customer_contact, service_type, preferred_date, preferred_time, call_mode, notes, status, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
-        (session_id, customer_name, customer_contact, service_type, preferred_date, preferred_time, call_mode, notes, now),
+        """INSERT INTO bookings (session_id, customer_name, customer_contact, service_type, preferred_date, preferred_time, call_mode, notes, status, tenant_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
+        (session_id, customer_name, customer_contact, service_type, preferred_date, preferred_time, call_mode, notes, tenant_id, now),
     )
     booking_id = cur.lastrowid
     conn.commit()
@@ -445,9 +580,12 @@ def create_booking(
     return dict(row)
 
 
-def list_bookings() -> List[Dict[str, Any]]:
+def list_bookings(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM bookings ORDER BY id DESC").fetchall()
+    if tenant_id:
+        rows = conn.execute("SELECT * FROM bookings WHERE tenant_id = ? ORDER BY id DESC", (tenant_id,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM bookings ORDER BY id DESC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -472,16 +610,28 @@ def delete_booking(booking_id: int) -> bool:
 
 
 # --- Tracking (Orders / Projects / IT Tickets) ---
-def get_trackable_by_code(tracking_code: str) -> Optional[Dict[str, Any]]:
+def get_trackable_by_code(tracking_code: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     conn = get_conn()
-    row = conn.execute("SELECT * FROM trackables WHERE UPPER(tracking_code) = UPPER(?)", (tracking_code.strip(),)).fetchone()
+    clean_code = tracking_code.strip()
+    if tenant_id:
+        row = conn.execute(
+            "SELECT * FROM trackables WHERE UPPER(tracking_code) = UPPER(?) AND tenant_id = ?",
+            (clean_code, tenant_id),
+        ).fetchone()
+        if not row:
+            row = conn.execute("SELECT * FROM trackables WHERE UPPER(tracking_code) = UPPER(?)", (clean_code,)).fetchone()
+    else:
+        row = conn.execute("SELECT * FROM trackables WHERE UPPER(tracking_code) = UPPER(?)", (clean_code,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
 
-def list_trackables() -> List[Dict[str, Any]]:
+def list_trackables(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     conn = get_conn()
-    rows = conn.execute("SELECT * FROM trackables ORDER BY id DESC").fetchall()
+    if tenant_id:
+        rows = conn.execute("SELECT * FROM trackables WHERE tenant_id = ? ORDER BY id DESC", (tenant_id,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM trackables ORDER BY id DESC").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -494,12 +644,14 @@ def upsert_trackable(
     status: str,
     eta: str,
     last_update: str,
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     conn = get_conn()
     now = utc_now()
+    clean_code = tracking_code.strip().upper()
     conn.execute(
-        """INSERT INTO trackables (tracking_code, customer_name, item_title, category, status, eta, last_update, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO trackables (tracking_code, customer_name, item_title, category, status, eta, last_update, tenant_id, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(tracking_code) DO UPDATE SET
              customer_name = excluded.customer_name,
              item_title = excluded.item_title,
@@ -507,11 +659,12 @@ def upsert_trackable(
              status = excluded.status,
              eta = excluded.eta,
              last_update = excluded.last_update,
+             tenant_id = excluded.tenant_id,
              updated_at = excluded.updated_at""",
-        (tracking_code.strip().upper(), customer_name, item_title, category, status, eta, last_update, now),
+        (clean_code, customer_name, item_title, category, status, eta, last_update, tenant_id, now),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM trackables WHERE UPPER(tracking_code) = UPPER(?)", (tracking_code.strip(),)).fetchone()
+    row = conn.execute("SELECT * FROM trackables WHERE UPPER(tracking_code) = ?", (clean_code,)).fetchone()
     conn.close()
     return dict(row)
 

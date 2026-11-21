@@ -52,12 +52,22 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class TenantPayload(BaseModel):
+    slug: str = Field(..., min_length=2)
+    name: str = Field(..., min_length=1)
+    business_mode: str = "hybrid"
+    support_email: Optional[str] = ""
+    system_prompt: Optional[str] = ""
+    widget_color: Optional[str] = "#141413"
+
+
 class ChatRequest(BaseModel):
     session_id: str = Field(..., min_length=1)
     message: str = Field(..., min_length=1)
     mode: Optional[str] = None
     visitor_name: Optional[str] = "Guest"
     visitor_email: Optional[str] = ""
+    tenant_id: Optional[str] = "default"
 
 
 class FeedbackRequest(BaseModel):
@@ -70,6 +80,7 @@ class KnowledgePayload(BaseModel):
     category: str = "General"
     mode_scope: str = "all"
     content: str = Field(..., min_length=1)
+    tenant_id: Optional[str] = "default"
 
 
 class ImportUrlPayload(BaseModel):
@@ -77,6 +88,7 @@ class ImportUrlPayload(BaseModel):
     category: str = "Web"
     mode_scope: str = "all"
     custom_title: Optional[str] = None
+    tenant_id: Optional[str] = "default"
 
 
 class TicketPayload(BaseModel):
@@ -85,6 +97,7 @@ class TicketPayload(BaseModel):
     customer_email: str = Field(..., min_length=3)
     subject: str = Field(..., min_length=2)
     summary: Optional[str] = ""
+    tenant_id: Optional[str] = "default"
 
 
 class TicketStatusPayload(BaseModel):
@@ -100,6 +113,7 @@ class BookingPayload(BaseModel):
     preferred_time: str = Field(..., min_length=2)
     call_mode: str = "voice_callback"
     notes: Optional[str] = ""
+    tenant_id: Optional[str] = "default"
 
 
 class BookingStatusPayload(BaseModel):
@@ -114,6 +128,7 @@ class TrackablePayload(BaseModel):
     status: str = "in_progress"
     eta: str = "TBD"
     last_update: str = Field(..., min_length=2)
+    tenant_id: Optional[str] = "default"
 
 
 class SettingsPayload(BaseModel):
@@ -160,12 +175,32 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/api/public/settings")
-def read_public_settings():
-    settings = db.get_settings()
+@app.get("/api/public/tenant/{slug}")
+def get_public_tenant(slug: str):
+    tenant = db.get_tenant(slug)
+    if not tenant:
+        raise HTTPException(status_code=404, detail=f"Tenant '{slug}' not found")
     return {
-        "business_name": settings.get("business_name", "Owfy"),
-        "agent_mode": settings.get("agent_mode", "hybrid"),
+        "slug": tenant["slug"],
+        "name": tenant["name"],
+        "business_mode": tenant["business_mode"],
+        "support_email": tenant["support_email"],
+        "widget_color": tenant.get("widget_color", "#141413"),
+    }
+
+
+@app.get("/api/public/settings")
+def read_public_settings(tenant: Optional[str] = "default"):
+    settings = db.get_settings()
+    t = db.get_tenant(tenant or "default") or db.get_tenant("default")
+    b_name = t["name"] if t and t.get("name") else settings.get("business_name", "Owfy")
+    a_mode = t["business_mode"] if t and t.get("business_mode") else settings.get("agent_mode", "hybrid")
+    w_color = t.get("widget_color", "#141413") if t else "#141413"
+    return {
+        "business_name": b_name,
+        "agent_mode": a_mode,
+        "widget_color": w_color,
+        "tenant_id": t["slug"] if t else (tenant or "default"),
     }
 
 
@@ -177,12 +212,23 @@ def get_public_session_history(session_id: str):
 @app.post("/api/chat")
 async def chat(req: ChatRequest, request: Request):
     check_rate_limit(request, "chat", max_requests=20, window_sec=60)
-    db.ensure_session(req.session_id, req.visitor_name or "Guest", req.visitor_email or "")
+    tenant_slug = req.tenant_id or "default"
+    db.ensure_session(req.session_id, req.visitor_name or "Guest", req.visitor_email or "", tenant_id=tenant_slug)
     history = db.get_session_messages(req.session_id, limit=12)
     settings = db.get_settings()
 
+    tenant = db.get_tenant(tenant_slug) or db.get_tenant("default")
+    if tenant:
+        settings["business_name"] = tenant["name"]
+        if tenant.get("business_mode"):
+            settings["agent_mode"] = tenant["business_mode"]
+        if tenant.get("support_email"):
+            settings["support_email"] = tenant["support_email"]
+        if tenant.get("system_prompt"):
+            settings["system_prompt"] = tenant["system_prompt"]
+
     effective_mode = req.mode if req.mode in ("it_support", "business_booking", "hybrid") else settings.get("agent_mode", "hybrid")
-    docs = db.list_knowledge_docs(mode_filter=effective_mode)
+    docs = db.list_knowledge_docs(mode_filter=effective_mode, tenant_id=tenant_slug)
 
     chunks = retrieve_relevant_chunks(req.message, docs, top_k=3)
     sources = [{"title": c["title"], "category": c["category"], "score": c["score"]} for c in chunks]
@@ -194,10 +240,11 @@ async def chat(req: ChatRequest, request: Request):
         retrieved_chunks=chunks,
         settings=settings,
         mode_override=effective_mode,
+        tenant_id=tenant_slug,
     )
 
-    db.add_message(req.session_id, "user", req.message)
-    msg_id = db.add_message(req.session_id, "assistant", reply, sources=sources, escalated=should_escalate)
+    db.add_message(req.session_id, "user", req.message, tenant_id=tenant_slug)
+    msg_id = db.add_message(req.session_id, "assistant", reply, sources=sources, escalated=should_escalate, tenant_id=tenant_slug)
 
     return {
         "session_id": req.session_id,
@@ -206,6 +253,7 @@ async def chat(req: ChatRequest, request: Request):
         "sources": sources,
         "suggest_escalation": should_escalate,
         "action_card": action_card,
+        "tenant_id": tenant_slug,
     }
 
 
@@ -219,7 +267,8 @@ def submit_feedback(payload: FeedbackRequest):
 @app.post("/api/bookings")
 def create_public_booking(payload: BookingPayload, request: Request):
     check_rate_limit(request, "bookings", max_requests=10, window_sec=60)
-    db.ensure_session(payload.session_id, payload.customer_name, payload.customer_contact)
+    tenant_slug = payload.tenant_id or "default"
+    db.ensure_session(payload.session_id, payload.customer_name, payload.customer_contact, tenant_id=tenant_slug)
     booking = db.create_booking(
         session_id=payload.session_id,
         customer_name=payload.customer_name,
@@ -229,14 +278,15 @@ def create_public_booking(payload: BookingPayload, request: Request):
         preferred_time=payload.preferred_time,
         call_mode=payload.call_mode,
         notes=payload.notes or "",
+        tenant_id=tenant_slug,
     )
     return {"booking": booking}
 
 
 @app.get("/api/track/{tracking_code}")
-def lookup_public_tracking(tracking_code: str, request: Request):
+def lookup_public_tracking(tracking_code: str, request: Request, tenant: Optional[str] = None):
     check_rate_limit(request, "track", max_requests=30, window_sec=60)
-    item = db.get_trackable_by_code(tracking_code)
+    item = db.get_trackable_by_code(tracking_code, tenant_id=tenant)
     if not item:
         raise HTTPException(status_code=404, detail=f"No record found for tracking code '{tracking_code}'")
     return {"item": item}
@@ -245,8 +295,15 @@ def lookup_public_tracking(tracking_code: str, request: Request):
 @app.post("/api/tickets")
 def submit_ticket(payload: TicketPayload, request: Request):
     check_rate_limit(request, "tickets", max_requests=5, window_sec=60)
-    db.ensure_session(payload.session_id, payload.customer_name, payload.customer_email)
+    tenant_slug = payload.tenant_id or "default"
+    db.ensure_session(payload.session_id, payload.customer_name, payload.customer_email, tenant_id=tenant_slug)
     settings = db.get_settings()
+    tenant = db.get_tenant(tenant_slug)
+    if tenant:
+        if tenant.get("name"):
+            settings["business_name"] = tenant["name"]
+        if tenant.get("support_email"):
+            settings["support_email"] = tenant["support_email"]
 
     summary = payload.summary.strip()
     if not summary:
@@ -261,6 +318,7 @@ def submit_ticket(payload: TicketPayload, request: Request):
         summary=summary,
         email_sent=False,
         email_note="Pending",
+        tenant_id=tenant_slug,
     )
 
     sent, note = send_escalation_email(
@@ -285,9 +343,34 @@ def submit_ticket(payload: TicketPayload, request: Request):
 
 
 # --- Protected Admin Routes ---
+@app.get("/api/tenants")
+def get_tenants(_: str = Depends(require_admin)):
+    return {"tenants": db.list_tenants()}
+
+
+@app.post("/api/tenants")
+def save_tenant(payload: TenantPayload, _: str = Depends(require_admin)):
+    tenant = db.upsert_tenant(
+        slug=payload.slug,
+        name=payload.name,
+        business_mode=payload.business_mode,
+        support_email=payload.support_email or "",
+        system_prompt=payload.system_prompt or "",
+        widget_color=payload.widget_color or "#141413",
+    )
+    return {"tenant": tenant}
+
+
+@app.delete("/api/tenants/{tenant_id}")
+def remove_tenant(tenant_id: int, _: str = Depends(require_admin)):
+    if not db.delete_tenant(tenant_id):
+        raise HTTPException(status_code=400, detail="Cannot delete tenant (default tenant is protected).")
+    return {"deleted": True}
+
+
 @app.get("/api/sessions")
-def get_sessions(_: str = Depends(require_admin)):
-    return {"sessions": db.list_sessions(), "feedback": db.get_feedback_stats()}
+def get_sessions(tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
+    return {"sessions": db.list_sessions(tenant_id=tenant_id), "feedback": db.get_feedback_stats(tenant_id=tenant_id)}
 
 
 @app.get("/api/sessions/{session_id}")
@@ -296,19 +379,32 @@ def get_session_history(session_id: str, _: str = Depends(require_admin)):
 
 
 @app.get("/api/knowledge")
-def get_knowledge(_: str = Depends(require_admin)):
-    return {"docs": db.list_knowledge_docs()}
+def get_knowledge(tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
+    return {"docs": db.list_knowledge_docs(tenant_id=tenant_id)}
 
 
 @app.post("/api/knowledge")
 def create_knowledge(payload: KnowledgePayload, _: str = Depends(require_admin)):
-    doc = db.add_knowledge_doc(payload.title, payload.category, payload.content, payload.mode_scope)
+    doc = db.add_knowledge_doc(
+        title=payload.title,
+        category=payload.category,
+        content=payload.content,
+        mode_scope=payload.mode_scope,
+        tenant_id=payload.tenant_id or "default",
+    )
     return {"doc": doc}
 
 
 @app.put("/api/knowledge/{doc_id}")
 def edit_knowledge(doc_id: int, payload: KnowledgePayload, _: str = Depends(require_admin)):
-    doc = db.update_knowledge_doc(doc_id, payload.title, payload.category, payload.content, payload.mode_scope)
+    doc = db.update_knowledge_doc(
+        doc_id,
+        payload.title,
+        payload.category,
+        payload.content,
+        payload.mode_scope,
+        tenant_id=payload.tenant_id or "default",
+    )
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found")
     return {"doc": doc}
@@ -322,8 +418,8 @@ def remove_knowledge(doc_id: int, _: str = Depends(require_admin)):
 
 
 @app.get("/api/knowledge/search")
-def search_knowledge(q: str, _: str = Depends(require_admin)):
-    docs = db.list_knowledge_docs()
+def search_knowledge(q: str, tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
+    docs = db.list_knowledge_docs(tenant_id=tenant_id)
     return {"results": retrieve_relevant_chunks(q, docs, top_k=5)}
 
 
@@ -342,6 +438,7 @@ async def import_knowledge_from_url(payload: ImportUrlPayload, _: str = Depends(
         category=payload.category,
         content=content,
         mode_scope=payload.mode_scope,
+        tenant_id=payload.tenant_id or "default",
     )
     return {"doc": doc, "chars": len(content)}
 
@@ -352,6 +449,7 @@ async def import_knowledge_from_pdf(
     category: str = Form("Manual"),
     mode_scope: str = Form("all"),
     custom_title: Optional[str] = Form(None),
+    tenant_id: str = Form("default"),
     _: str = Depends(require_admin),
 ):
     if not file.filename.lower().endswith(".pdf"):
@@ -371,13 +469,14 @@ async def import_knowledge_from_pdf(
         category=category,
         content=content,
         mode_scope=mode_scope,
+        tenant_id=tenant_id or "default",
     )
     return {"doc": doc, "pages": pages, "chars": len(content)}
 
 
 @app.get("/api/tickets")
-def get_tickets(_: str = Depends(require_admin)):
-    return {"tickets": db.list_tickets()}
+def get_tickets(tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
+    return {"tickets": db.list_tickets(tenant_id=tenant_id)}
 
 
 @app.patch("/api/tickets/{ticket_id}")
@@ -396,8 +495,8 @@ def remove_ticket(ticket_id: int, _: str = Depends(require_admin)):
 
 
 @app.get("/api/bookings")
-def get_bookings(_: str = Depends(require_admin)):
-    return {"bookings": db.list_bookings()}
+def get_bookings(tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
+    return {"bookings": db.list_bookings(tenant_id=tenant_id)}
 
 
 @app.patch("/api/bookings/{booking_id}")
@@ -416,8 +515,8 @@ def remove_booking(booking_id: int, _: str = Depends(require_admin)):
 
 
 @app.get("/api/trackables")
-def get_trackables(_: str = Depends(require_admin)):
-    return {"items": db.list_trackables()}
+def get_trackables(tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
+    return {"items": db.list_trackables(tenant_id=tenant_id)}
 
 
 @app.post("/api/trackables")
@@ -430,6 +529,7 @@ def save_trackable(payload: TrackablePayload, _: str = Depends(require_admin)):
         status=payload.status,
         eta=payload.eta,
         last_update=payload.last_update,
+        tenant_id=payload.tenant_id or "default",
     )
     return {"item": item}
 
