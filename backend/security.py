@@ -79,3 +79,53 @@ def mask_pii(text: str) -> str:
     text = CARD_RE.sub("[CARD]", text)
     text = PHONE_RE.sub("[PHONE]", text)
     return text
+
+
+# --- Prompt-Injection Guardrails & Input Sanitization ---
+PROMPT_INJECTION_PATTERNS = [
+    re.compile(r"\bignore\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b", re.IGNORECASE),
+    re.compile(r"\bdisregard\s+(?:all\s+)?(?:previous|prior|above)\s+instructions\b", re.IGNORECASE),
+    re.compile(r"\bforget\s+(?:all\s+)?(?:your\s+)?instructions\b", re.IGNORECASE),
+    re.compile(r"\b(?:you\s+are\s+now|act\s+as)\s+(?:DAN|developer\s+mode|unrestricted|jailbroken)\b", re.IGNORECASE),
+    re.compile(r"\b(?:reveal|show|print|output|leak|repeat)\s+(?:your\s+)?(?:system\s+prompt|developer\s+instructions|initial\s+prompt)\b", re.IGNORECASE),
+    re.compile(r"\bsystem\s+override\b", re.IGNORECASE),
+    re.compile(r"<\s*/?\s*system\s*>", re.IGNORECASE),
+    re.compile(r"\[\s*/?\s*INST\s*\]", re.IGNORECASE),
+    re.compile(r"<\s*/?\s*s\s*>", re.IGNORECASE),
+    re.compile(r"\bnew\s+system\s+prompt\s*:", re.IGNORECASE),
+    re.compile(r"\bbypass\s+(?:content\s+filter|guardrails?|safety\s+filters?)\b", re.IGNORECASE),
+]
+
+
+def detect_prompt_injection(text: str) -> tuple[bool, Optional[str]]:
+    """
+    Scans input for common prompt injection heuristics and jailbreak attempts.
+    Returns (is_injection, reason).
+    """
+    if not text:
+        return False, None
+
+    for pattern in PROMPT_INJECTION_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return True, f"Matched injection pattern: '{match.group(0)}'"
+
+    # Check for excessive delimiter abuse or pseudo-role injections
+    role_pattern = re.compile(r"(?:\n|^)\s*(?:system|assistant|admin)\s*:\s*", re.IGNORECASE)
+    if len(role_pattern.findall(text)) >= 2:
+        return True, "Repeated structural role spoofing detected"
+
+    return False, None
+
+
+def sanitize_user_input(text: str) -> str:
+    """
+    Sanitizes user input by removing null bytes, neutralizing control tags,
+    and trimming excessive structural whitespaces.
+    """
+    if not text:
+        return ""
+    sanitized = "".join(ch for ch in text if ch in ("\n", "\r", "\t") or ord(ch) >= 32)
+    sanitized = sanitized.replace("</system>", "&lt;/system&gt;").replace("<system>", "&lt;system&gt;")
+    sanitized = sanitized.replace("[INST]", "&#91;INST&#93;").replace("[/INST]", "&#91;/INST&#93;")
+    return sanitized.strip()

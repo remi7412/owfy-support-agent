@@ -104,6 +104,7 @@
       <button class="tab-btn" onclick="switchTab('sessions', this)">Memory</button>
       <button class="tab-btn" onclick="switchTab('knowledge', this)">Knowledge</button>
       <button class="tab-btn" onclick="switchTab('tenants', this)">Tenants</button>
+      <button class="tab-btn" onclick="switchTab('audit', this)">Audit Log</button>
       <button class="tab-btn" onclick="switchTab('settings', this)">Settings</button>
       <a class="btn" href="/chat">Chat UI</a>
       <a class="btn" href="/">Landing</a>
@@ -398,6 +399,30 @@
         <div id="settings-msg" style="font-size:12px;color:var(--muted);"></div>
       </form>
     </div>
+
+    <div id="tab-audit" class="section card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div>
+          <h2 style="font-size:15px;margin:0;">Security Audit Trail &amp; Access Log</h2>
+          <span style="font-size:12px;color:var(--muted);">Tamper-evident logs of logins, settings changes, prompt-injection blocks, and data modifications</span>
+        </div>
+        <button class="btn" onclick="refreshAll()">Refresh Logs</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Timestamp</th>
+            <th>Admin / Actor</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Details</th>
+            <th>IP Address</th>
+          </tr>
+        </thead>
+        <tbody id="audit-body"></tbody>
+      </table>
+    </div>
   </div>
 
   <script>
@@ -459,10 +484,10 @@
     async function refreshAll() {
       if (!getToken()) { showLogin(); return; }
       try {
-        const [tRes, bRes, trRes, sRes, kRes, setRes, tenRes] = await Promise.all([
+        const [tRes, bRes, trRes, sRes, kRes, setRes, tenRes, audRes] = await Promise.all([
           apiFetch("/api/tickets"), apiFetch("/api/bookings"), apiFetch("/api/trackables"),
           apiFetch("/api/sessions"), apiFetch("/api/knowledge"), apiFetch("/api/settings"),
-          apiFetch("/api/tenants")
+          apiFetch("/api/tenants"), apiFetch("/api/audit-logs")
         ]);
         const tickets = (await tRes.json()).tickets;
         const bookings = (await bRes.json()).bookings;
@@ -474,6 +499,7 @@
         const docs = (await kRes.json()).docs;
         const settings = (await setRes.json()).settings;
         const tenants = (await tenRes.json()).tenants || [];
+        const auditLogs = audRes.ok ? (await audRes.json()).logs || [] : [];
 
         document.getElementById("kpi-sessions").textContent = sessions.length;
         document.getElementById("kpi-resolution").textContent = (resData.resolution_rate_pct ?? 100) + "%";
@@ -581,6 +607,26 @@
         document.getElementById("set-wh-bookings").value = settings.webhook_bookings_url || "";
         document.getElementById("set-wh-voice").value = settings.webhook_voice_callback_url || "";
         document.getElementById("set-wh-secret").value = settings.webhook_secret || "";
+
+        const auditBody = document.getElementById("audit-body");
+        if (auditBody) {
+          auditBody.innerHTML = auditLogs.map(l => {
+            const isAlert = l.action.includes("blocked") || l.action.includes("failed");
+            const badgeBg = isAlert ? "#fee2e2" : "#f3f4f6";
+            const badgeCol = isAlert ? "#991b1b" : "#374151";
+            return `
+              <tr>
+                <td>#${l.id}</td>
+                <td style="font-size:12px;color:var(--muted);white-space:nowrap;">${(l.created_at || '').replace('T', ' ').slice(0, 19)}</td>
+                <td><strong>${l.admin_user}</strong></td>
+                <td><span style="font-size:11px;padding:2px 6px;border-radius:4px;background:${badgeBg};color:${badgeCol};font-weight:600;">${l.action}</span></td>
+                <td><span style="font-size:12px;color:var(--muted);">${l.target_type || '-'}${l.target_id ? ' (' + l.target_id + ')' : ''}</span></td>
+                <td style="font-size:12px;">${l.details || ''}</td>
+                <td style="font-size:12px;color:var(--muted);">${l.ip_address || '—'}</td>
+              </tr>
+            `;
+          }).join("") || `<tr><td colspan="7" style="color:var(--muted);">No audit logs yet.</td></tr>`;
+        }
       } catch (e) {}
     }
 

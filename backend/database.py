@@ -129,6 +129,19 @@ def init_db() -> None:
     )
     """)
 
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        admin_user TEXT NOT NULL,
+        action TEXT NOT NULL,
+        target_type TEXT,
+        target_id TEXT,
+        details TEXT,
+        ip_address TEXT,
+        created_at TEXT NOT NULL
+    )
+    """)
+
     # Safe migrations for existing databases
     _ensure_column(cur, "sessions", "tenant_id", "TEXT DEFAULT 'default'")
     _ensure_column(cur, "messages", "tenant_id", "TEXT DEFAULT 'default'")
@@ -763,6 +776,37 @@ def delete_trackable(item_id: int) -> bool:
     conn.commit()
     conn.close()
     return ok
+
+
+# --- Security Audit Trail ---
+def add_audit_log(
+    admin_user: str,
+    action: str,
+    target_type: Optional[str] = None,
+    target_id: Optional[str] = None,
+    details: Optional[str] = None,
+    ip_address: Optional[str] = None,
+) -> Dict[str, Any]:
+    conn = get_conn()
+    now = utc_now()
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO audit_logs (admin_user, action, target_type, target_id, details, ip_address, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (admin_user, action, target_type, target_id, details, ip_address, now),
+    )
+    log_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM audit_logs WHERE id = ?", (log_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else {}
+
+
+def list_audit_logs(limit: int = 100) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 init_db()

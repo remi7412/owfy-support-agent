@@ -17,7 +17,9 @@ from backend.webhooks import dispatch_webhook
 from backend.security import (
     check_rate_limit,
     create_access_token,
+    detect_prompt_injection,
     require_admin,
+    sanitize_user_input,
     verify_admin_credentials,
 )
 
@@ -183,9 +185,25 @@ def serve_admin_ui():
 @app.post("/api/auth/login")
 def admin_login(payload: LoginRequest, request: Request):
     check_rate_limit(request, "login", max_requests=10, window_sec=60)
+    ip = request.client.host if request.client else None
     if not verify_admin_credentials(payload.username, payload.password):
+        db.add_audit_log(
+            admin_user=payload.username or "unknown",
+            action="login_failed",
+            target_type="auth",
+            details="Invalid username or password attempted",
+            ip_address=ip,
+        )
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    return {"access_token": create_access_token(payload.username), "token_type": "bearer"}
+    token = create_access_token(payload.username)
+    db.add_audit_log(
+        admin_user=payload.username,
+        action="login_success",
+        target_type="auth",
+        details="Admin signed in successfully",
+        ip_address=ip,
+    )
+    return {"access_token": token, "token_type": "bearer"}
 
 
 # --- Public Customer Routes ---
@@ -237,11 +255,48 @@ def get_public_session_history(session_id: str):
 async def chat(req: ChatRequest, request: Request):
     check_rate_limit(request, "chat", max_requests=20, window_sec=60)
     tenant_slug = req.tenant_id or "default"
+    clean_message = sanitize_user_input(req.message)
+
+    # Prompt-injection & adversarial attack guardrail
+    is_injection, reason = detect_prompt_injection(clean_message)
+    if is_injection:
+        db.add_audit_log(
+            admin_user="system",
+            action="prompt_injection_blocked",
+            target_type="security",
+            target_id=req.session_id,
+            details=f"Blocked prompt injection: {reason}",
+            ip_address=request.client.host if request.client else None,
+        )
+        db.ensure_session(req.session_id, req.visitor_name or "Guest", req.visitor_email or "", tenant_id=tenant_slug)
+        db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
+        guardrail_reply = (
+            "Security Notice: Your input contains prohibited instructions or prompt override patterns. "
+            "Please state your customer support request clearly."
+        )
+        msg_id = db.add_message(
+            req.session_id,
+            "assistant",
+            guardrail_reply,
+            sources=[{"title": "Security Guardrail", "category": "Safety"}],
+            escalated=False,
+            tenant_id=tenant_slug,
+        )
+        return {
+            "session_id": req.session_id,
+            "message_id": msg_id,
+            "reply": guardrail_reply,
+            "sources": [{"title": "Security Guardrail", "category": "Safety"}],
+            "suggest_escalation": False,
+            "action_card": None,
+            "tenant_id": tenant_slug,
+        }
+
     db.ensure_session(req.session_id, req.visitor_name or "Guest", req.visitor_email or "", tenant_id=tenant_slug)
 
     session = db.get_session(req.session_id)
     if session and session.get("human_active"):
-        db.add_message(req.session_id, "user", req.message, tenant_id=tenant_slug)
+        db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
         return {
             "session_id": req.session_id,
             "message_id": None,
@@ -269,12 +324,12 @@ async def chat(req: ChatRequest, request: Request):
     effective_mode = req.mode if req.mode in ("it_support", "business_booking", "hybrid") else settings.get("agent_mode", "hybrid")
     docs = db.list_knowledge_docs(mode_filter=effective_mode, tenant_id=tenant_slug)
 
-    chunks = retrieve_relevant_chunks(req.message, docs, top_k=3)
+    chunks = retrieve_relevant_chunks(clean_message, docs, top_k=3)
     sources = [{"title": c["title"], "category": c["category"], "score": c["score"]} for c in chunks]
 
     reply, should_escalate, action_card = await generate_support_reply(
         session_id=req.session_id,
-        user_message=req.message,
+        user_message=clean_message,
         history=history,
         retrieved_chunks=chunks,
         settings=settings,
@@ -282,7 +337,7 @@ async def chat(req: ChatRequest, request: Request):
         tenant_id=tenant_slug,
     )
 
-    db.add_message(req.session_id, "user", req.message, tenant_id=tenant_slug)
+    db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
     msg_id = db.add_message(req.session_id, "assistant", reply, sources=sources, escalated=should_escalate, tenant_id=tenant_slug)
 
     return {
@@ -401,7 +456,7 @@ def get_tenants(_: str = Depends(require_admin)):
 
 
 @app.post("/api/tenants")
-def save_tenant(payload: TenantPayload, _: str = Depends(require_admin)):
+def save_tenant(payload: TenantPayload, user: str = Depends(require_admin)):
     tenant = db.upsert_tenant(
         slug=payload.slug,
         name=payload.name,
@@ -410,13 +465,15 @@ def save_tenant(payload: TenantPayload, _: str = Depends(require_admin)):
         system_prompt=payload.system_prompt or "",
         widget_color=payload.widget_color or "#141413",
     )
+    db.add_audit_log(user, "tenant_upsert", "tenant", payload.slug, f"Saved tenant '{payload.name}'")
     return {"tenant": tenant}
 
 
 @app.delete("/api/tenants/{tenant_id}")
-def remove_tenant(tenant_id: int, _: str = Depends(require_admin)):
+def remove_tenant(tenant_id: int, user: str = Depends(require_admin)):
     if not db.delete_tenant(tenant_id):
         raise HTTPException(status_code=400, detail="Cannot delete tenant (default tenant is protected).")
+    db.add_audit_log(user, "tenant_delete", "tenant", str(tenant_id), "Deleted custom tenant")
     return {"deleted": True}
 
 
@@ -448,12 +505,13 @@ def get_session_history(session_id: str, _: str = Depends(require_admin)):
 
 
 @app.post("/api/sessions/{session_id}/takeover")
-def toggle_takeover(session_id: str, payload: TakeoverPayload, _: str = Depends(require_admin)):
+def toggle_takeover(session_id: str, payload: TakeoverPayload, user: str = Depends(require_admin)):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     db.set_session_human_takeover(session_id, payload.active)
     updated_session = db.get_session(session_id)
+    db.add_audit_log(user, "takeover_toggle", "session", session_id, f"Takeover active={payload.active}")
     return {"session_id": session_id, "human_active": bool(payload.active), "session": updated_session}
 
 
@@ -496,7 +554,7 @@ def get_knowledge(tenant_id: Optional[str] = None, _: str = Depends(require_admi
 
 
 @app.post("/api/knowledge")
-def create_knowledge(payload: KnowledgePayload, _: str = Depends(require_admin)):
+def create_knowledge(payload: KnowledgePayload, user: str = Depends(require_admin)):
     doc = db.add_knowledge_doc(
         title=payload.title,
         category=payload.category,
@@ -504,11 +562,12 @@ def create_knowledge(payload: KnowledgePayload, _: str = Depends(require_admin))
         mode_scope=payload.mode_scope,
         tenant_id=payload.tenant_id or "default",
     )
+    db.add_audit_log(user, "knowledge_create", "knowledge", str(doc["id"]), f"Created doc '{payload.title}' ({payload.tenant_id or 'default'})")
     return {"doc": doc}
 
 
 @app.put("/api/knowledge/{doc_id}")
-def edit_knowledge(doc_id: int, payload: KnowledgePayload, _: str = Depends(require_admin)):
+def edit_knowledge(doc_id: int, payload: KnowledgePayload, user: str = Depends(require_admin)):
     doc = db.update_knowledge_doc(
         doc_id,
         payload.title,
@@ -519,13 +578,15 @@ def edit_knowledge(doc_id: int, payload: KnowledgePayload, _: str = Depends(requ
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Knowledge document not found")
+    db.add_audit_log(user, "knowledge_edit", "knowledge", str(doc_id), f"Updated doc '{payload.title}'")
     return {"doc": doc}
 
 
 @app.delete("/api/knowledge/{doc_id}")
-def remove_knowledge(doc_id: int, _: str = Depends(require_admin)):
+def remove_knowledge(doc_id: int, user: str = Depends(require_admin)):
     if not db.delete_knowledge_doc(doc_id):
         raise HTTPException(status_code=404, detail="Knowledge document not found")
+    db.add_audit_log(user, "knowledge_delete", "knowledge", str(doc_id), "Deleted knowledge document")
     return {"deleted": True}
 
 
@@ -536,7 +597,7 @@ def search_knowledge(q: str, tenant_id: Optional[str] = None, _: str = Depends(r
 
 
 @app.post("/api/knowledge/import-url")
-async def import_knowledge_from_url(payload: ImportUrlPayload, _: str = Depends(require_admin)):
+async def import_knowledge_from_url(payload: ImportUrlPayload, user: str = Depends(require_admin)):
     try:
         title, content = await fetch_website_content(payload.url)
     except ValueError as err:
@@ -552,6 +613,7 @@ async def import_knowledge_from_url(payload: ImportUrlPayload, _: str = Depends(
         mode_scope=payload.mode_scope,
         tenant_id=payload.tenant_id or "default",
     )
+    db.add_audit_log(user, "knowledge_import_url", "knowledge", str(doc["id"]), f"Imported URL '{payload.url}'")
     return {"doc": doc, "chars": len(content)}
 
 
@@ -562,7 +624,7 @@ async def import_knowledge_from_pdf(
     mode_scope: str = Form("all"),
     custom_title: Optional[str] = Form(None),
     tenant_id: str = Form("default"),
-    _: str = Depends(require_admin),
+    user: str = Depends(require_admin),
 ):
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only .pdf files are supported")
@@ -583,6 +645,7 @@ async def import_knowledge_from_pdf(
         mode_scope=mode_scope,
         tenant_id=tenant_id or "default",
     )
+    db.add_audit_log(user, "knowledge_import_pdf", "knowledge", str(doc["id"]), f"Imported PDF '{file.filename}' ({pages} pages)")
     return {"doc": doc, "pages": pages, "chars": len(content)}
 
 
@@ -592,17 +655,19 @@ def get_tickets(tenant_id: Optional[str] = None, _: str = Depends(require_admin)
 
 
 @app.patch("/api/tickets/{ticket_id}")
-def patch_ticket(ticket_id: int, payload: TicketStatusPayload, _: str = Depends(require_admin)):
+def patch_ticket(ticket_id: int, payload: TicketStatusPayload, user: str = Depends(require_admin)):
     ticket = db.update_ticket_status(ticket_id, payload.status)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    db.add_audit_log(user, "ticket_status_update", "ticket", str(ticket_id), f"Status updated to '{payload.status}'")
     return {"ticket": ticket}
 
 
 @app.delete("/api/tickets/{ticket_id}")
-def remove_ticket(ticket_id: int, _: str = Depends(require_admin)):
+def remove_ticket(ticket_id: int, user: str = Depends(require_admin)):
     if not db.delete_ticket(ticket_id):
         raise HTTPException(status_code=404, detail="Ticket not found")
+    db.add_audit_log(user, "ticket_delete", "ticket", str(ticket_id), "Deleted ticket")
     return {"deleted": True}
 
 
@@ -612,10 +677,12 @@ def get_bookings(tenant_id: Optional[str] = None, _: str = Depends(require_admin
 
 
 @app.patch("/api/bookings/{booking_id}")
-async def patch_booking(booking_id: int, payload: BookingStatusPayload, _: str = Depends(require_admin)):
+async def patch_booking(booking_id: int, payload: BookingStatusPayload, user: str = Depends(require_admin)):
     booking = db.update_booking_status(booking_id, payload.status)
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
+
+    db.add_audit_log(user, "booking_status_update", "booking", str(booking_id), f"Status changed to '{payload.status}'")
 
     voice_dispatched = False
     if payload.status == "confirmed" and booking.get("call_mode") == "voice_callback":
@@ -664,9 +731,10 @@ async def patch_booking(booking_id: int, payload: BookingStatusPayload, _: str =
 
 
 @app.delete("/api/bookings/{booking_id}")
-def remove_booking(booking_id: int, _: str = Depends(require_admin)):
+def remove_booking(booking_id: int, user: str = Depends(require_admin)):
     if not db.delete_booking(booking_id):
         raise HTTPException(status_code=404, detail="Booking not found")
+    db.add_audit_log(user, "booking_delete", "booking", str(booking_id), "Deleted booking")
     return {"deleted": True}
 
 
@@ -676,7 +744,7 @@ def get_trackables(tenant_id: Optional[str] = None, _: str = Depends(require_adm
 
 
 @app.post("/api/trackables")
-def save_trackable(payload: TrackablePayload, _: str = Depends(require_admin)):
+def save_trackable(payload: TrackablePayload, user: str = Depends(require_admin)):
     item = db.upsert_trackable(
         tracking_code=payload.tracking_code,
         customer_name=payload.customer_name,
@@ -687,13 +755,15 @@ def save_trackable(payload: TrackablePayload, _: str = Depends(require_admin)):
         last_update=payload.last_update,
         tenant_id=payload.tenant_id or "default",
     )
+    db.add_audit_log(user, "trackable_upsert", "tracking", payload.tracking_code, f"Status: {payload.status}")
     return {"item": item}
 
 
 @app.delete("/api/trackables/{item_id}")
-def remove_trackable(item_id: int, _: str = Depends(require_admin)):
+def remove_trackable(item_id: int, user: str = Depends(require_admin)):
     if not db.delete_trackable(item_id):
         raise HTTPException(status_code=404, detail="Tracking item not found")
+    db.add_audit_log(user, "trackable_delete", "tracking", str(item_id), "Deleted trackable item")
     return {"deleted": True}
 
 
@@ -703,8 +773,15 @@ def read_settings(_: str = Depends(require_admin)):
 
 
 @app.put("/api/settings")
-def write_settings(payload: SettingsPayload, _: str = Depends(require_admin)):
+def write_settings(payload: SettingsPayload, user: str = Depends(require_admin)):
     updates: Dict[str, str] = {
         k: v for k, v in payload.model_dump().items() if v is not None
     }
-    return {"settings": db.update_settings(updates)}
+    updated = db.update_settings(updates)
+    db.add_audit_log(user, "settings_update", "settings", None, f"Updated keys: {', '.join(updates.keys())}")
+    return {"settings": updated}
+
+
+@app.get("/api/audit-logs")
+def get_audit_logs(limit: int = 100, _: str = Depends(require_admin)):
+    return {"logs": db.list_audit_logs(limit=limit)}
