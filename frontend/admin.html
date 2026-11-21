@@ -114,6 +114,7 @@
   <div class="container">
     <div class="kpis">
       <div class="card"><div class="kpi-label">Sessions</div><div class="kpi-val" id="kpi-sessions">0</div></div>
+      <div class="card"><div class="kpi-label">AI Resolution</div><div class="kpi-val" id="kpi-resolution" style="color:#166534;">100%</div></div>
       <div class="card"><div class="kpi-label">Open Tickets</div><div class="kpi-val" id="kpi-tickets">0</div></div>
       <div class="card"><div class="kpi-label">Pending Bookings</div><div class="kpi-val" id="kpi-bookings">0</div></div>
       <div class="card"><div class="kpi-label">CSAT Helpful</div><div class="kpi-val" id="kpi-csat">100%</div></div>
@@ -386,6 +387,7 @@
         <h2 style="font-size:15px;margin-top:16px;">Automations &amp; Webhooks (n8n / Slack / WhatsApp)</h2>
         <div><label>Tickets Webhook URL (POST event on ticket escalation)</label><input id="set-wh-tickets" placeholder="https://n8n.yourdomain.com/webhook/tickets" /></div>
         <div><label>Bookings Webhook URL (POST event on new booking / call)</label><input id="set-wh-bookings" placeholder="https://n8n.yourdomain.com/webhook/bookings" /></div>
+        <div><label>Voice Callback Webhook URL (Twilio / Vapi Outbound Trigger)</label><input id="set-wh-voice" placeholder="https://api.vapi.ai/call/phone or Twilio Studio Webhook" /></div>
         <div><label>Webhook HMAC Secret (Optional signature verification)</label><input id="set-wh-secret" placeholder="owfy_wh_secret_key" /></div>
         <div style="display:flex;gap:8px;align-items:center;">
           <button class="btn" type="button" onclick="testWebhookPing()">Test Webhook Ping</button>
@@ -468,11 +470,13 @@
         const sData = await sRes.json();
         const sessions = sData.sessions;
         const fb = sData.feedback || { csat_pct: 100 };
+        const resData = sData.resolution || { resolution_rate_pct: 100 };
         const docs = (await kRes.json()).docs;
         const settings = (await setRes.json()).settings;
         const tenants = (await tenRes.json()).tenants || [];
 
         document.getElementById("kpi-sessions").textContent = sessions.length;
+        document.getElementById("kpi-resolution").textContent = (resData.resolution_rate_pct ?? 100) + "%";
         document.getElementById("kpi-tickets").textContent = tickets.filter(t => t.status !== "resolved").length;
         document.getElementById("kpi-bookings").textContent = bookings.filter(b => b.status === "pending").length;
         document.getElementById("kpi-csat").textContent = fb.csat_pct + "%";
@@ -499,7 +503,11 @@
           <tr>
             <td>#${b.id}</td>
             <td>${b.customer_name}<br><span style="color:var(--muted);font-size:12px;">${b.customer_contact}</span></td>
-            <td><strong>${b.service_type}</strong><br><span style="color:var(--muted);font-size:12px;">${b.call_mode.replace("_", " ")}</span></td>
+            <td>
+              <strong>${b.service_type}</strong><br>
+              <span style="color:var(--muted);font-size:12px;">${b.call_mode.replace("_", " ")}</span>
+              ${b.call_mode === 'voice_callback' && b.voice_dispatched ? '<br><span style="font-size:10px;background:#e0f2fe;color:#0369a1;padding:1px 5px;border-radius:3px;font-weight:600;">📞 Voice Callback Dispatched</span>' : ''}
+            </td>
             <td>${b.preferred_date}<br><span style="color:var(--muted);font-size:12px;">${b.preferred_time}</span></td>
             <td>
               <select onchange="updateBooking(${b.id}, this.value)">
@@ -571,6 +579,7 @@
         document.getElementById("set-prompt").value = settings.system_prompt || "";
         document.getElementById("set-wh-tickets").value = settings.webhook_tickets_url || "";
         document.getElementById("set-wh-bookings").value = settings.webhook_bookings_url || "";
+        document.getElementById("set-wh-voice").value = settings.webhook_voice_callback_url || "";
         document.getElementById("set-wh-secret").value = settings.webhook_secret || "";
       } catch (e) {}
     }
@@ -835,11 +844,11 @@
     }
 
     async function testWebhookPing() {
-      const url = document.getElementById("set-wh-tickets").value.trim() || document.getElementById("set-wh-bookings").value.trim();
+      const url = document.getElementById("set-wh-voice").value.trim() || document.getElementById("set-wh-tickets").value.trim() || document.getElementById("set-wh-bookings").value.trim();
       const secret = document.getElementById("set-wh-secret").value.trim();
       const statusEl = document.getElementById("wh-test-status");
       if (!url) {
-        statusEl.textContent = "Please enter a Tickets or Bookings Webhook URL first.";
+        statusEl.textContent = "Please enter a Voice Callback, Tickets, or Bookings Webhook URL first.";
         statusEl.style.color = "#b91c1c";
         return;
       }
@@ -878,6 +887,7 @@
           system_prompt: document.getElementById("set-prompt").value,
           webhook_tickets_url: document.getElementById("set-wh-tickets").value.trim(),
           webhook_bookings_url: document.getElementById("set-wh-bookings").value.trim(),
+          webhook_voice_callback_url: document.getElementById("set-wh-voice").value.trim(),
           webhook_secret: document.getElementById("set-wh-secret").value.trim()
         })
       });

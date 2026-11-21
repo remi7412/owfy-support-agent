@@ -140,6 +140,7 @@ def init_db() -> None:
     _ensure_column(cur, "messages", "feedback", "INTEGER DEFAULT 0")
     _ensure_column(cur, "knowledge_docs", "mode_scope", "TEXT DEFAULT 'all'")
     _ensure_column(cur, "sessions", "human_active", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "bookings", "voice_dispatched", "INTEGER DEFAULT 0")
 
     cur.execute("SELECT COUNT(*) FROM tenants")
     if cur.fetchone()[0] == 0:
@@ -156,6 +157,7 @@ def init_db() -> None:
         "agent_mode": "hybrid",
         "webhook_tickets_url": os.getenv("WEBHOOK_TICKETS_URL", ""),
         "webhook_bookings_url": os.getenv("WEBHOOK_BOOKINGS_URL", ""),
+        "webhook_voice_callback_url": os.getenv("WEBHOOK_VOICE_CALLBACK_URL", ""),
         "webhook_secret": os.getenv("WEBHOOK_SECRET", ""),
         "system_prompt": (
             "You are the AI Customer & Technical Support Specialist for {business_name}. "
@@ -402,6 +404,45 @@ def get_feedback_stats(tenant_id: Optional[str] = None) -> Dict[str, int]:
     return {"up": up, "down": down, "csat_pct": pct}
 
 
+def get_resolution_analytics(tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    conn = get_conn()
+    if tenant_id:
+        total_sessions = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE tenant_id = ?", (tenant_id,)
+        ).fetchone()[0]
+        escalated_sessions = conn.execute(
+            """SELECT COUNT(DISTINCT session_id) FROM tickets
+               WHERE session_id IS NOT NULL AND session_id != '' AND tenant_id = ?""",
+            (tenant_id,),
+        ).fetchone()[0]
+        takeover_sessions = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE human_active = 1 AND tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()[0]
+    else:
+        total_sessions = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        escalated_sessions = conn.execute(
+            """SELECT COUNT(DISTINCT session_id) FROM tickets
+               WHERE session_id IS NOT NULL AND session_id != ''"""
+        ).fetchone()[0]
+        takeover_sessions = conn.execute(
+            "SELECT COUNT(*) FROM sessions WHERE human_active = 1"
+        ).fetchone()[0]
+    conn.close()
+
+    total_escalated = min(total_sessions, escalated_sessions)
+    resolved_sessions = max(0, total_sessions - total_escalated)
+    resolution_rate_pct = round((resolved_sessions / total_sessions) * 100) if total_sessions > 0 else 100
+
+    return {
+        "total_sessions": total_sessions,
+        "escalated_sessions": total_escalated,
+        "takeover_sessions": takeover_sessions,
+        "resolved_sessions": resolved_sessions,
+        "resolution_rate_pct": resolution_rate_pct,
+    }
+
+
 def get_session_messages(session_id: str, limit: int = 20) -> List[Dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
@@ -618,6 +659,13 @@ def list_bookings(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def get_booking(booking_id: int) -> Optional[Dict[str, Any]]:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM bookings WHERE id = ?", (booking_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def update_booking_status(booking_id: int, status: str) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     conn.execute("UPDATE bookings SET status = ? WHERE id = ?", (status, booking_id))
@@ -625,6 +673,16 @@ def update_booking_status(booking_id: int, status: str) -> Optional[Dict[str, An
     row = conn.execute("SELECT * FROM bookings WHERE id = ?", (booking_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def mark_booking_voice_dispatched(booking_id: int) -> bool:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("UPDATE bookings SET voice_dispatched = 1 WHERE id = ?", (booking_id,))
+    ok = cur.rowcount > 0
+    conn.commit()
+    conn.close()
+    return ok
 
 
 def delete_booking(booking_id: int) -> bool:
@@ -705,3 +763,6 @@ def delete_trackable(item_id: int) -> bool:
     conn.commit()
     conn.close()
     return ok
+
+
+init_db()

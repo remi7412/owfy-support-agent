@@ -141,6 +141,7 @@ class SettingsPayload(BaseModel):
     system_prompt: Optional[str] = None
     webhook_tickets_url: Optional[str] = None
     webhook_bookings_url: Optional[str] = None
+    webhook_voice_callback_url: Optional[str] = None
     webhook_secret: Optional[str] = None
 
 
@@ -421,7 +422,19 @@ def remove_tenant(tenant_id: int, _: str = Depends(require_admin)):
 
 @app.get("/api/sessions")
 def get_sessions(tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
-    return {"sessions": db.list_sessions(tenant_id=tenant_id), "feedback": db.get_feedback_stats(tenant_id=tenant_id)}
+    return {
+        "sessions": db.list_sessions(tenant_id=tenant_id),
+        "feedback": db.get_feedback_stats(tenant_id=tenant_id),
+        "resolution": db.get_resolution_analytics(tenant_id=tenant_id),
+    }
+
+
+@app.get("/api/analytics/resolution")
+def get_resolution_analytics(tenant_id: Optional[str] = None, _: str = Depends(require_admin)):
+    return {
+        "resolution": db.get_resolution_analytics(tenant_id=tenant_id),
+        "feedback": db.get_feedback_stats(tenant_id=tenant_id),
+    }
 
 
 @app.get("/api/sessions/{session_id}")
@@ -599,11 +612,55 @@ def get_bookings(tenant_id: Optional[str] = None, _: str = Depends(require_admin
 
 
 @app.patch("/api/bookings/{booking_id}")
-def patch_booking(booking_id: int, payload: BookingStatusPayload, _: str = Depends(require_admin)):
+async def patch_booking(booking_id: int, payload: BookingStatusPayload, _: str = Depends(require_admin)):
     booking = db.update_booking_status(booking_id, payload.status)
     if not booking:
         raise HTTPException(status_code=404, detail="Booking not found")
-    return {"booking": booking}
+
+    voice_dispatched = False
+    if payload.status == "confirmed" and booking.get("call_mode") == "voice_callback":
+        settings = db.get_settings()
+        v_url = settings.get("webhook_voice_callback_url", "").strip() or settings.get("webhook_bookings_url", "").strip()
+        v_sec = settings.get("webhook_secret", "").strip()
+        if v_url:
+            voice_payload = {
+                "event": "voice_callback.confirmed",
+                "booking_id": booking["id"],
+                "customer_name": booking["customer_name"],
+                "phone_number": booking["customer_contact"],
+                "customer_contact": booking["customer_contact"],
+                "service_type": booking["service_type"],
+                "preferred_date": booking["preferred_date"],
+                "preferred_time": booking["preferred_time"],
+                "notes": booking.get("notes", ""),
+                "call_mode": booking["call_mode"],
+                "tenant_id": booking.get("tenant_id", "default"),
+                "vapi_payload": {
+                    "phoneNumber": booking["customer_contact"],
+                    "customer": {"name": booking["customer_name"]},
+                    "assistantOverrides": {
+                        "variableValues": {
+                            "customer_name": booking["customer_name"],
+                            "service_type": booking["service_type"],
+                            "booking_id": str(booking["id"]),
+                        }
+                    },
+                },
+                "twilio_payload": {
+                    "To": booking["customer_contact"],
+                    "Parameters": {
+                        "customer_name": booking["customer_name"],
+                        "service": booking["service_type"],
+                        "booking_id": str(booking["id"]),
+                    },
+                },
+            }
+            asyncio.create_task(dispatch_webhook("voice_callback.confirmed", voice_payload, v_url, v_sec))
+            db.mark_booking_voice_dispatched(booking_id)
+            booking["voice_dispatched"] = 1
+            voice_dispatched = True
+
+    return {"booking": booking, "voice_hook_dispatched": voice_dispatched}
 
 
 @app.delete("/api/bookings/{booking_id}")
