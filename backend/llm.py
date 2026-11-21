@@ -10,9 +10,21 @@ GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 MODE_INSTRUCTIONS = {
     "it_support": (
-        "MODE: IT SUPPORT SPECIALIST. Focus strictly on technical troubleshooting, networking, OS, security, and IT ticket triage. "
-        "Ask concise diagnostic questions (OS, exact error, recent changes), give numbered resolution steps, and assess severity (P1-P4). "
-        "Do NOT bring up unrelated business pricing or salon/store bookings."
+        "MODE: IT SUPPORT SPECIALIST & 4-STAGE 'AI-FIRST, TICKET-LAST' DIAGNOSTIC ENGINE.\n"
+        "Guidelines:\n"
+        "1. For P1 department-wide / critical infrastructure outages (e.g., entire office offline, core server down, payment gateway outage): "
+        "call `render_it_diagnostic_flow` with is_p1_outage=true, severity='P1', and append [ESCALATE] to offer immediate human ticket escalation.\n"
+        "2. For L1/L2 individual user technical issues (Wi-Fi/Ethernet connectivity, VPN failure, DNS resolution, printer offline, Outlook/email sync, slow PC, software crashes): "
+        "ALWAYS invoke the `render_it_diagnostic_flow` tool first with 3-5 ordered, actionable diagnostic steps before suggesting a ticket. "
+        "Withhold [ESCALATE] while walking the user through the diagnostic wizard steps.\n"
+        "3. Step design in `render_it_diagnostic_flow`: each step must contain a clear step title, plain-language instruction, an optional safe Windows command (e.g. 'ipconfig /all', 'ping 8.8.8.8 -n 4', 'tracert 8.8.8.8', 'nslookup google.com', 'ipconfig /flushdns', 'netsh wlan show interfaces'), and expected normal result.\n"
+        "4. Command output diagnosis: when the user pastes command output or error messages, analyze the technical root cause:\n"
+        "   - APIPA address (169.254.x.x) -> DHCP server failed to assign an IP. Advise 'ipconfig /release' then 'ipconfig /renew', or checking router DHCP scope.\n"
+        "   - Successful ping to 8.8.8.8 but 'nslookup' fails -> DNS failure. Recommend setting DNS to 1.1.1.1 / 8.8.8.8 or running 'ipconfig /flushdns'.\n"
+        "   - Gateway unreachable or 'Destination host unreachable' -> Local Wi-Fi or Ethernet cable link failure.\n"
+        "   - 'Request timed out' to gateway -> Local subnet/firewall block or router offline.\n"
+        "5. Escalation: only append [ESCALATE] if all troubleshooting steps have failed or if the user explicitly insists on human handoff.\n"
+        "Do NOT bring up unrelated salon or retail store bookings."
     ),
     "business_booking": (
         "MODE: LOCAL BUSINESS & BOOKING CONCIERGE. Focus on helping customers book appointments or voice callbacks, "
@@ -20,7 +32,8 @@ MODE_INSTRUCTIONS = {
     ),
     "hybrid": (
         "MODE: HYBRID ENTERPRISE AGENT. You handle both IT technical triage AND business service bookings, "
-        "voice callbacks, and order/ticket tracking. Use lookup_tracking or create_booking tools whenever appropriate."
+        "voice callbacks, and order/ticket tracking. Use lookup_tracking, create_booking, or render_it_diagnostic_flow tools whenever appropriate.\n"
+        "When handling IT technical issues, follow the 4-stage AI-First diagnostic engine: call `render_it_diagnostic_flow` first for L1/L2 technical issues and withhold [ESCALATE] until diagnostic steps are exhausted."
     ),
 }
 
@@ -59,6 +72,47 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "render_it_diagnostic_flow",
+            "description": "Render an interactive visual flowchart and step-by-step diagnostic wizard for IT, network, VPN, printer, OS, or hardware/software issues.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "issue_title": {
+                        "type": "string",
+                        "description": "Short clear summary of the issue (e.g., 'Internet / Wi-Fi Connectivity', 'VPN Gateway Timeout', 'Printer Spooler Offline')",
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["P1", "P2", "P3", "P4"],
+                        "description": "P1 (Critical Outage, department-wide), P2 (High impact, workflow blocked), P3 (Medium, single user degraded), P4 (Low, minor inquiry)",
+                    },
+                    "is_p1_outage": {
+                        "type": "boolean",
+                        "description": "True if department-wide or critical infrastructure outage allowing immediate human ticket escalation",
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": "Ordered diagnostic steps for guided user troubleshooting",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "step_number": {"type": "integer"},
+                                "title": {"type": "string", "description": "Short step title, e.g. 'Check Wi-Fi Link' or 'Ping Gateway'"},
+                                "instruction": {"type": "string", "description": "Actionable instructions for the user"},
+                                "command": {"type": "string", "description": "Optional safe CLI command, e.g. 'ipconfig /all' or 'ping 8.8.8.8'"},
+                                "expected_result": {"type": "string", "description": "What normal or healthy output looks like"},
+                            },
+                            "required": ["step_number", "title", "instruction", "expected_result"],
+                        },
+                    },
+                },
+                "required": ["issue_title", "severity", "is_p1_outage", "steps"],
+            },
+        },
+    },
 ]
 
 
@@ -83,6 +137,9 @@ def _execute_tool(name: str, args: Dict[str, Any], session_id: str, tenant_id: s
             tenant_id=tenant_id,
         )
         return json.dumps({"booked": True, "booking": booking}), {"type": "booking", "data": booking}
+
+    if name == "render_it_diagnostic_flow":
+        return json.dumps({"rendered": True, "flow": args}), {"type": "it_diagnostic", "data": args}
 
     return json.dumps({"error": "Unknown tool"}), None
 
@@ -125,6 +182,52 @@ async def generate_support_reply(
     messages.append({"role": "user", "content": mask_pii(user_message)})
 
     if not api_key or api_key.startswith("gsk_your_"):
+        if effective_mode in ("it_support", "hybrid") and any(
+            k in user_message.lower()
+            for k in ["internet", "wifi", "wi-fi", "network", "offline", "vpn", "printer", "dns", "ping", "slow", "down", "broken", "connect"]
+        ):
+            demo_flow = {
+                "issue_title": "Network & Internet Connectivity Diagnostic",
+                "severity": "P3",
+                "is_p1_outage": False,
+                "steps": [
+                    {
+                        "step_number": 1,
+                        "title": "Check Physical & Wi-Fi Link",
+                        "instruction": "Verify that Wi-Fi is toggled ON in Windows Quick Settings or Ethernet cable is firmly seated with a solid link light.",
+                        "command": "netsh wlan show interfaces",
+                        "expected_result": "State: connected with a valid SSID and signal strength > 70%."
+                    },
+                    {
+                        "step_number": 2,
+                        "title": "Verify IP Address & Gateway (DHCP)",
+                        "instruction": "Open Command Prompt and check your assigned IPv4 address. If it begins with 169.254.x.x, DHCP has failed.",
+                        "command": "ipconfig /all",
+                        "expected_result": "Valid IPv4 address (e.g. 192.168.1.x or 10.x.x.x) and Default Gateway listed."
+                    },
+                    {
+                        "step_number": 3,
+                        "title": "Test Gateway & Public Reachability",
+                        "instruction": "Ping Google Public DNS (8.8.8.8) to verify outbound IP packets can leave your local router.",
+                        "command": "ping 8.8.8.8 -n 4",
+                        "expected_result": "4 packets sent, 4 packets received, 0% packet loss with latency < 50ms."
+                    },
+                    {
+                        "step_number": 4,
+                        "title": "Test Domain Name Resolution (DNS)",
+                        "instruction": "Verify that domain names can be translated to IP addresses by querying your configured DNS server.",
+                        "command": "nslookup google.com",
+                        "expected_result": "Non-authoritative answer showing valid public IP addresses."
+                    }
+                ]
+            }
+            return (
+                "**[AI Diagnostic Engine]** I have initiated a structured 4-step diagnostic wizard for your connectivity issue. "
+                "Please follow the active step in the interactive card below or download the 1-click Windows Net Check script.",
+                False,
+                {"type": "it_diagnostic", "data": demo_flow}
+            )
+
         if retrieved_chunks:
             top = retrieved_chunks[0]
             return f"**[Demo Mode]** Based on **{top['title']}**: {top['content']}", False, None
@@ -172,6 +275,17 @@ async def generate_support_reply(
                 raw_reply = (resp2.json()["choices"][0]["message"].get("content") or "").strip()
             else:
                 raw_reply = (choice_msg.get("content") or "").strip()
+
+            if not raw_reply and action_card:
+                if action_card.get("type") == "it_diagnostic":
+                    raw_reply = (
+                        f"I've initialized a guided diagnostic flow for **{action_card['data'].get('issue_title', 'your issue')}**. "
+                        "Follow each step in the visual wizard below, copy the suggested commands, and check the expected results."
+                    )
+                elif action_card.get("type") == "tracking":
+                    raw_reply = f"Here is the status for tracking code **{action_card['data'].get('tracking_code')}**."
+                elif action_card.get("type") == "booking":
+                    raw_reply = f"Your booking #{action_card['data'].get('id')} has been created."
 
     except httpx.HTTPStatusError as e:
         return (

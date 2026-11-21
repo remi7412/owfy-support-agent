@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Owfy — Enterprise AI Support Platform</title>
+  <title>Owfy — Flagship Enterprise AI Customer Support &amp; IT Helpdesk Platform</title>
   <style>
     :root {
       --bg: #faf9f6;
@@ -12,168 +12,531 @@
       --muted: #6b6a65;
       --border: #e6e4de;
       --soft: #f3f2ee;
+      --success: #166534;
+      --success-soft: #ecfdf5;
+      --success-border: #bbf7d0;
+      --badge-bg: rgba(20, 20, 19, 0.05);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
       background: var(--bg); color: var(--ink); line-height: 1.6;
+      overflow-x: hidden;
     }
+
+    /* Sticky Navigation */
     header {
-      background: var(--surface); border-bottom: 1px solid var(--border);
-      padding: 16px 32px; display: flex; justify-content: space-between; align-items: center;
+      position: sticky; top: 0; z-index: 1000;
+      backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      background: rgba(250, 249, 246, 0.90);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 28px; display: flex; justify-content: space-between; align-items: center;
+      transition: background 0.2s ease;
     }
-    .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
+    .brand {
+      display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px;
+      color: var(--ink); text-decoration: none;
+    }
     .mark {
       width: 32px; height: 32px; border-radius: 8px; background: var(--ink);
-      color: #fff; display: grid; place-items: center; font-size: 14px;
+      color: #fff; display: grid; place-items: center; font-size: 14px; font-weight: 700;
     }
-    .nav { display: flex; gap: 10px; }
+    .nav-links {
+      display: flex; gap: 24px; align-items: center; list-style: none;
+    }
+    .nav-links a {
+      color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500;
+      transition: color 0.15s ease;
+    }
+    .nav-links a:hover { color: var(--ink); }
+    .nav-actions { display: flex; gap: 10px; align-items: center; }
+
+    /* Buttons */
     .btn {
-      font-size: 13px; padding: 8px 15px; border-radius: 8px;
+      font-size: 13px; font-weight: 500; padding: 8px 16px; border-radius: 8px;
       border: 1px solid var(--border); background: var(--surface);
-      color: var(--ink); text-decoration: none; cursor: pointer;
+      color: var(--ink); text-decoration: none; cursor: pointer; display: inline-flex;
+      align-items: center; justify-content: center; gap: 6px; transition: all 0.15s ease;
     }
     .btn:hover { background: var(--soft); }
     .btn-primary { background: var(--ink); color: #fff; border-color: var(--ink); }
-    .btn-primary:hover { background: #2c2c2a; }
+    .btn-primary:hover { background: #2c2c2a; border-color: #2c2c2a; }
+    .btn-lg { padding: 11px 22px; font-size: 14.5px; border-radius: 10px; }
 
+    /* Hero Section */
     .hero {
-      max-width: 960px; margin: 64px auto 48px; padding: 0 24px; text-align: center;
+      max-width: 980px; margin: 72px auto 44px; padding: 0 24px; text-align: center;
     }
     .eyebrow {
-      display: inline-block; font-size: 12px; color: var(--muted);
-      background: var(--surface); border: 1px solid var(--border);
-      padding: 4px 12px; border-radius: 999px; margin-bottom: 18px;
+      display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
+      color: var(--muted); background: var(--surface); border: 1px solid var(--border);
+      padding: 5px 14px; border-radius: 999px; margin-bottom: 22px;
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #10b981;
+      display: inline-block; box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
     }
     .hero h1 {
-      font-size: clamp(32px, 5vw, 48px); font-weight: 600;
-      letter-spacing: -0.025em; line-height: 1.15; margin-bottom: 16px;
+      font-size: clamp(34px, 5.2vw, 54px); font-weight: 700;
+      letter-spacing: -0.03em; line-height: 1.14; margin-bottom: 20px;
     }
     .hero p {
-      max-width: 640px; margin: 0 auto 28px; color: var(--muted); font-size: 16px;
+      max-width: 680px; margin: 0 auto 32px; color: var(--muted); font-size: 17px; line-height: 1.6;
     }
-    .hero-cta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+    .hero-cta { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; margin-bottom: 48px; }
 
-    .grid {
-      max-width: 1040px; margin: 0 auto 64px; padding: 0 24px;
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 18px;
+    /* Trust & Live KPI Bar */
+    .kpi-bar {
+      max-width: 940px; margin: 0 auto 76px; padding: 18px 24px;
+      background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; text-align: center;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.02);
     }
-    .card {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 14px; padding: 24px; display: flex; flex-direction: column; gap: 12px;
-    }
-    .tag {
-      font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
-      color: var(--muted); font-weight: 600;
-    }
-    .card h2 { font-size: 18px; font-weight: 600; }
-    .card p { font-size: 14px; color: var(--muted); flex: 1; }
-    .card ul { margin-left: 18px; font-size: 13px; color: var(--ink); display: grid; gap: 6px; }
+    .kpi-item h4 { font-size: 22px; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; }
+    .kpi-item p { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
-    .features {
-      max-width: 1040px; margin: 0 auto 64px; padding: 28px 24px;
+    /* Section Headings */
+    .section-wrap { max-width: 1040px; margin: 0 auto 84px; padding: 0 24px; }
+    .section-header { text-align: center; max-width: 640px; margin: 0 auto 40px; }
+    .section-tag {
+      font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.08em;
+      color: var(--muted); font-weight: 700; margin-bottom: 8px; display: inline-block;
+    }
+    .section-header h2 { font-size: 30px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.25; }
+    .section-header p { font-size: 15px; color: var(--muted); margin-top: 10px; }
+
+    /* How It Works Steps */
+    .steps-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+    }
+    .step-card {
       background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;
+      padding: 26px; display: flex; flex-direction: column; gap: 12px; position: relative;
     }
-    .feat h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
-    .feat p { font-size: 13px; color: var(--muted); }
+    .step-num {
+      width: 28px; height: 28px; border-radius: 6px; background: var(--soft);
+      border: 1px solid var(--border); display: grid; place-items: center;
+      font-size: 12px; font-weight: 700; color: var(--ink);
+    }
+    .step-card h3 { font-size: 17px; font-weight: 600; }
+    .step-card p { font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+    .code-chip {
+      background: #141413; color: #f8fafc; font-family: ui-monospace, Consolas, monospace;
+      font-size: 11.5px; padding: 7px 10px; border-radius: 6px; overflow-x: auto;
+      white-space: nowrap; margin-top: auto; border: 1px solid #27272a;
+    }
+
+    /* Comparison / Differentiator Cards */
+    .comparison-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+    }
+    .comp-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 26px; display: flex; flex-direction: column; gap: 14px;
+    }
+    .comp-badge {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+      font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--success); background: var(--success-soft); border: 1px solid var(--success-border);
+      padding: 3px 9px; border-radius: 999px; width: fit-content;
+    }
+    .comp-card h3 { font-size: 18px; font-weight: 600; line-height: 1.3; }
+    .comp-card p { font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+    .comp-list { list-style: none; display: grid; gap: 7px; font-size: 13px; color: var(--ink); }
+    .comp-list li::before { content: "✓ "; color: var(--success); font-weight: 700; }
+
+    /* Models Grid */
+    .models-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+    }
+    .model-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 26px; display: flex; flex-direction: column; gap: 14px; position: relative;
+    }
+    .model-card.featured {
+      border: 1.5px solid var(--ink); box-shadow: 0 10px 30px rgba(20, 20, 19, 0.06);
+    }
+    .featured-pill {
+      position: absolute; top: -11px; right: 20px; background: var(--ink); color: #fff;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 2px 9px; border-radius: 999px;
+    }
+    .model-card h3 { font-size: 19px; font-weight: 600; }
+    .model-card p { font-size: 13.5px; color: var(--muted); flex: 1; }
+    .model-card ul { margin-left: 18px; font-size: 13px; color: var(--ink); display: grid; gap: 6px; }
+
+    /* Pricing Section */
+    .pricing-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+    }
+    .price-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+      padding: 28px; display: flex; flex-direction: column; gap: 16px; position: relative;
+    }
+    .price-card.popular {
+      border: 1.5px solid var(--ink); box-shadow: 0 10px 30px rgba(20, 20, 19, 0.06);
+    }
+    .price-badge {
+      position: absolute; top: -11px; right: 20px; background: var(--ink); color: #fff;
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+      padding: 2px 10px; border-radius: 999px;
+    }
+    .price-title { font-size: 18px; font-weight: 600; }
+    .price-val { font-size: 32px; font-weight: 700; color: var(--ink); letter-spacing: -0.02em; }
+    .price-sub { font-size: 12.5px; color: var(--muted); }
+    .price-features { list-style: none; display: grid; gap: 9px; font-size: 13px; color: var(--ink); flex: 1; }
+    .price-features li::before { content: "• "; color: var(--muted); font-weight: 700; }
+
+    /* Security & Features */
+    .features-strip {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px;
+    }
+    .feat-box {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+      padding: 20px;
+    }
+    .feat-box h4 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+    .feat-box p { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+    /* Footer */
     footer {
-      text-align: center; padding: 24px; font-size: 12px; color: var(--muted);
-      border-top: 1px solid var(--border);
+      background: var(--surface); border-top: 1px solid var(--border);
+      padding: 36px 28px 30px; margin-top: 40px; font-size: 13px; color: var(--muted);
+    }
+    .footer-inner {
+      max-width: 1040px; margin: 0 auto; display: flex; justify-content: space-between;
+      align-items: center; flex-wrap: wrap; gap: 20px;
+    }
+    .footer-links { display: flex; gap: 18px; list-style: none; }
+    .footer-links a { color: var(--muted); text-decoration: none; font-size: 12.5px; }
+    .footer-links a:hover { color: var(--ink); }
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+      color: var(--success); font-weight: 500;
+    }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .steps-grid, .comparison-grid, .models-grid, .pricing-grid {
+        grid-template-columns: 1fr;
+      }
+      .kpi-bar { grid-template-columns: repeat(2, 1fr); }
+      .features-strip { grid-template-columns: repeat(2, 1fr); }
+      .nav-links { display: none; }
+    }
+    @media (max-width: 560px) {
+      header { padding: 12px 18px; }
+      .kpi-bar { grid-template-columns: 1fr; }
+      .features-strip { grid-template-columns: 1fr; }
+      .footer-inner { flex-direction: column; align-items: flex-start; }
     }
   </style>
 </head>
 <body>
+
+  <!-- Sticky Top Nav -->
   <header>
-    <div class="brand">
+    <a href="/" class="brand">
       <div class="mark" id="brand-mark">O</div>
       <span id="brand-name">Owfy AI</span>
-    </div>
-    <div class="nav">
+    </a>
+    <ul class="nav-links">
+      <li><a href="#models">Models</a></li>
+      <li><a href="#how-it-works">How It Works</a></li>
+      <li><a href="#comparison">Why Owfy</a></li>
+      <li><a href="#security">Security</a></li>
+      <li><a href="#pricing">Pricing</a></li>
+    </ul>
+    <div class="nav-actions">
       <a class="btn" href="/chat">Launch Chat</a>
       <a class="btn btn-primary" href="/admin">Admin Console</a>
     </div>
   </header>
 
+  <!-- Hero Section -->
   <section class="hero">
-    <span class="eyebrow">PII-Masked · Mode-Isolated · 1-Line Embeddable Widget</span>
-    <h1>Autonomous Support Built for IT Teams &amp; Local Businesses</h1>
-    <p>Choose a specialized AI model tailored to your exact operation—from L1/L2 IT helpdesk triage to local service bookings, order tracking, and automated email escalation.</p>
+    <div class="eyebrow">
+      <span class="dot"></span>
+      <span>24/7 AI Triage · PII-Masked · Multi-Tenant · 1-Line Embed</span>
+    </div>
+    <h1>Autonomous Support Built for IT Teams &amp; Modern Businesses</h1>
+    <p>Self-service technical troubleshooting with visual IT flowcharts, 1-click URL &amp; PDF knowledge training, live human agent takeover, and instant multi-tenant isolation. Zero hallucinated nonsense.</p>
     <div class="hero-cta">
-      <a class="btn btn-primary" href="/chat?mode=hybrid">Try Hybrid Demo</a>
-      <a class="btn" href="/admin">Open Admin Dashboard</a>
+      <a class="btn btn-primary btn-lg" href="/chat?mode=hybrid">Try Hybrid Demo →</a>
+      <a class="btn btn-lg" href="#how-it-works">See How It Works</a>
+      <a class="btn btn-lg" href="/admin">Admin Console</a>
     </div>
   </section>
 
-  <section class="grid">
-    <div class="card">
-      <span class="tag">Model 01</span>
-      <h2>IT Support Specialist</h2>
-      <p>Focused strictly on technical troubleshooting, network diagnostics, and IT ticket triage—zero irrelevant sales clutter.</p>
-      <ul>
-        <li>Structured L1/L2 diagnostic steps</li>
-        <li>Live IT ticket tracking (e.g. <code>IT-2045</code>)</li>
-        <li>IT-scoped knowledge base &amp; P1 escalation</li>
-      </ul>
-      <a class="btn" href="/chat?mode=it_support">Launch IT Specialist →</a>
+  <!-- Live KPI & Trust Bar -->
+  <section class="kpi-bar">
+    <div class="kpi-item">
+      <h4>94.2%</h4>
+      <p>AI First-Contact Resolution</p>
     </div>
-
-    <div class="card">
-      <span class="tag">Model 02</span>
-      <h2>Local Business Concierge</h2>
-      <p>Built for clinics, salons, agencies, cafes, and retail stores needing 24/7 bookings, tracking, and customer care.</p>
-      <ul>
-        <li>Appointment &amp; voice callback scheduling</li>
-        <li>Real-time order tracking (e.g. <code>OWF-1001</code>)</li>
-        <li>Services, hours &amp; pricing Q&amp;A</li>
-      </ul>
-      <a class="btn" href="/chat?mode=business_booking">Launch Business Demo →</a>
+    <div class="kpi-item">
+      <h4>&lt; 800ms</h4>
+      <p>Groq Inference Latency</p>
     </div>
-
-    <div class="card">
-      <span class="tag">Model 03</span>
-      <h2>Hybrid Enterprise</h2>
-      <p>Full-spectrum AI assistant combining IT helpdesk triage with business bookings, tracking, and multi-channel escalation.</p>
-      <ul>
-        <li>All tools &amp; knowledge scopes unified</li>
-        <li>CSAT feedback &amp; persistent session memory</li>
-        <li>1-line <code>&lt;script src="/widget.js"&gt;</code> embed</li>
-      </ul>
-      <a class="btn btn-primary" href="/chat?mode=hybrid">Launch Hybrid Demo →</a>
+    <div class="kpi-item">
+      <h4>Zero-PII</h4>
+      <p>Redaction &amp; Injection Shield</p>
+    </div>
+    <div class="kpi-item">
+      <h4>1-Line JS</h4>
+      <p>Universal Widget Embed</p>
     </div>
   </section>
 
-  <section class="features">
-    <div class="feat">
-      <h3>Grounded RAG</h3>
-      <p>Answers strictly from mode-filtered business &amp; IT knowledge articles with source citations.</p>
+  <!-- How It Works Section -->
+  <section class="section-wrap" id="how-it-works">
+    <div class="section-header">
+      <span class="section-tag">Production Workflow</span>
+      <h2>How Owfy Works in Production</h2>
+      <p>Go from raw enterprise docs and URLs to an autonomous live support engine in under 3 minutes.</p>
     </div>
-    <div class="feat">
-      <h3>Enterprise Security</h3>
-      <p>Token-protected Admin console, per-IP rate limiting, and automatic PII redaction before LLM calls.</p>
-    </div>
-    <div class="feat">
-      <h3>Email Escalation</h3>
-      <p>One-click human handoff attaches full conversation memory and emails both team and customer.</p>
-    </div>
-    <div class="feat">
-      <h3>Docker Ready</h3>
-      <p>Deploy anywhere in minutes with persistent SQLite storage and zero external ML bloat.</p>
+
+    <div class="steps-grid">
+      <div class="step-card">
+        <div class="step-num">01</div>
+        <h3>1-Click URL &amp; PDF Training</h3>
+        <p>Drop company policy PDFs or paste documentation URLs. Pure-Python HTML text extraction and <code>pypdf</code> chunk and index your knowledge base with zero external vector DB costs or compilation dependencies.</p>
+        <div class="code-chip">POST /api/knowledge/import-url</div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-num">02</div>
+        <h3>Mode Selection &amp; Tone Isolation</h3>
+        <p>Route customer inquiries to dedicated specialist models: L1/L2 IT Diagnostic Specialist (with ticket-last triage), Local Business Concierge (with appointments &amp; tracking), or unified Hybrid Enterprise.</p>
+        <div class="code-chip">?mode=it_support | business_booking</div>
+      </div>
+
+      <div class="step-card">
+        <div class="step-num">03</div>
+        <h3>1-Line Embeddable Widget</h3>
+        <p>Embed the floating assistant into WordPress, Webflow, Shopify, or custom apps with a single script tag. Full multi-tenant isolation, custom branding, and responsive design baked in.</p>
+        <div class="code-chip">&lt;script src="/widget.js" data-tenant="acme"&gt;</div>
+      </div>
     </div>
   </section>
 
+  <!-- Built Better Than Generic Chatbots (Comparison) -->
+  <section class="section-wrap" id="comparison">
+    <div class="section-header">
+      <span class="section-tag">The Owfy Architecture</span>
+      <h2>Built Better Than Generic Chatbots</h2>
+      <p>Generic bots spit out generic paragraphs. Owfy provides structured diagnostics, instant human handoff, and complete governance.</p>
+    </div>
+
+    <div class="comparison-grid">
+      <div class="comp-card">
+        <span class="comp-badge">AI-First, Ticket-Last</span>
+        <h3>Visual SVG IT Diagnostics</h3>
+        <p>Empower users to fix Wi-Fi, VPN, and system faults with guided interactive flows before escalating to human IT engineers.</p>
+        <ul class="comp-list">
+          <li>Dynamic 4-stage inline SVG step flowchart</li>
+          <li>1-click CLI command box (e.g. <code>ipconfig /all</code>)</li>
+          <li>Safe Windows Net Check (<code>.bat</code>) download</li>
+          <li>Auto-prefilled escalation ticket with tested steps</li>
+        </ul>
+      </div>
+
+      <div class="comp-card">
+        <span class="comp-badge">Real-Time Control</span>
+        <h3>Live Human Agent Takeover</h3>
+        <p>Admins can intervene at any moment via the authenticated Admin Console, pausing the AI instantly for sensitive escalations.</p>
+        <ul class="comp-list">
+          <li>Instant "Take Over Chat" toggle in Admin Memory</li>
+          <li>Synchronous live polling with zero AI overrides</li>
+          <li>Outbound webhooks for n8n, Slack &amp; WhatsApp</li>
+          <li>Automated voice callback dispatch hook (Twilio/Vapi)</li>
+        </ul>
+      </div>
+
+      <div class="comp-card">
+        <span class="comp-badge">Enterprise Defense</span>
+        <h3>Security Audit Trail &amp; Guardrails</h3>
+        <p>Built with defence-in-depth protection against adversarial inputs, prompt leak attempts, and compliance violations.</p>
+        <ul class="comp-list">
+          <li>Client &amp; server regex PII redaction (email, SSN, cards)</li>
+          <li>Real-time prompt-injection &amp; override shield</li>
+          <li>Comprehensive <code>audit_logs</code> table with IP tracking</li>
+          <li>HMAC-signed Bearer token auth for all admin APIs</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Specialized AI Models -->
+  <section class="section-wrap" id="models">
+    <div class="section-header">
+      <span class="section-tag">Specialized Agents</span>
+      <h2>Choose Your Deployment Mode</h2>
+      <p>Mode isolation ensures IT troubleshooting never hallucinates salon pricing, and business customers never see terminal commands.</p>
+    </div>
+
+    <div class="models-grid">
+      <div class="model-card">
+        <span class="section-tag">Model 01</span>
+        <h3>IT Support Specialist</h3>
+        <p>Focused strictly on technical troubleshooting, network diagnostics, and IT ticket triage—zero irrelevant business noise.</p>
+        <ul>
+          <li>Interactive 4-stage diagnostic wizard</li>
+          <li>Live IT ticket tracking (e.g. <code>IT-2045</code>)</li>
+          <li>Root-cause diagnosis (APIPA, DNS, gateway)</li>
+          <li>P1 outage immediate human escalation</li>
+        </ul>
+        <a class="btn" href="/chat?mode=it_support">Launch IT Specialist →</a>
+      </div>
+
+      <div class="model-card">
+        <span class="section-tag">Model 02</span>
+        <h3>Local Business Concierge</h3>
+        <p>Engineered for clinics, salons, agencies, cafes, and retail stores needing 24/7 bookings, tracking, and customer care.</p>
+        <ul>
+          <li>Appointment &amp; voice callback booking</li>
+          <li>Real-time order tracking (e.g. <code>OWF-1001</code>)</li>
+          <li>Automated email alerts + customer confirmation</li>
+          <li>Service hours, location, and pricing Q&amp;A</li>
+        </ul>
+        <a class="btn" href="/chat?mode=business_booking">Launch Business Demo →</a>
+      </div>
+
+      <div class="model-card featured">
+        <span class="featured-pill">Most Versatile</span>
+        <span class="section-tag">Model 03</span>
+        <h3>Hybrid Enterprise</h3>
+        <p>Full-spectrum AI support combining technical IT triage with business bookings, order tracking, and multi-channel escalation.</p>
+        <ul>
+          <li>All tools &amp; knowledge scopes unified</li>
+          <li>Visual IT diagnostics + appointment bookings</li>
+          <li>CSAT analytics &amp; persistent session memory</li>
+          <li>1-line <code>widget.js</code> embed ready</li>
+        </ul>
+        <a class="btn btn-primary" href="/chat?mode=hybrid">Launch Hybrid Demo →</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Clean 3-Tier Pricing -->
+  <section class="section-wrap" id="pricing">
+    <div class="section-header">
+      <span class="section-tag">Transparent Plans</span>
+      <h2>Predictable Pricing for Modern Teams</h2>
+      <p>Deploy on your own infrastructure or run fully managed with pure predictability.</p>
+    </div>
+
+    <div class="pricing-grid">
+      <div class="price-card">
+        <div class="price-title">Starter</div>
+        <div class="price-val">$49<span style="font-size:14px; font-weight:400; color:var(--muted);">/mo</span></div>
+        <div class="price-sub">For single-site businesses and agile internal IT teams.</div>
+        <ul class="price-features">
+          <li>Single tenant (<code>tenant_id: default</code>)</li>
+          <li>Up to 1,500 conversations / month</li>
+          <li>1-Click Website URL &amp; PDF Training</li>
+          <li>Email ticket escalation (SMTP)</li>
+          <li>1-Line embeddable floating widget</li>
+          <li>Standard community support</li>
+        </ul>
+        <a class="btn" href="/chat?mode=hybrid">Start with Starter</a>
+      </div>
+
+      <div class="price-card popular">
+        <span class="price-badge">Most Popular</span>
+        <div class="price-title">Growth</div>
+        <div class="price-val">$149<span style="font-size:14px; font-weight:400; color:var(--muted);">/mo</span></div>
+        <div class="price-sub">For scaling companies managing multiple brands or departments.</div>
+        <ul class="price-features">
+          <li>Up to 5 isolated tenants with custom branding</li>
+          <li>Unlimited conversations &amp; knowledge docs</li>
+          <li>Visual SVG IT Diagnostics Engine</li>
+          <li>Live Human Agent Takeover &amp; Polling</li>
+          <li>n8n / Slack / WhatsApp Webhook triggers</li>
+          <li>CSAT resolution rate analytics dashboard</li>
+        </ul>
+        <a class="btn btn-primary" href="/chat?mode=hybrid">Launch Growth</a>
+      </div>
+
+      <div class="price-card">
+        <div class="price-title">Enterprise</div>
+        <div class="price-val">$499<span style="font-size:14px; font-weight:400; color:var(--muted);">/mo</span></div>
+        <div class="price-sub">For enterprises requiring dedicated infrastructure and custom integrations.</div>
+        <ul class="price-features">
+          <li>Unlimited tenants &amp; white-label branding</li>
+          <li>Dedicated Docker / VPS deployment</li>
+          <li>Twilio &amp; Vapi automated voice callback hook</li>
+          <li>SOC2-ready security audit logging</li>
+          <li>Prompt-injection defense shield</li>
+          <li>Custom SLA &amp; dedicated solutions engineer</li>
+        </ul>
+        <a class="btn" href="/chat?mode=business_booking">Book a Demo</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Security & Architecture -->
+  <section class="section-wrap" id="security">
+    <div class="section-header">
+      <span class="section-tag">Enterprise Hardened</span>
+      <h2>Security, Governance &amp; Compliance</h2>
+      <p>Engineered for mission-critical privacy, compliance, and deterministic control.</p>
+    </div>
+
+    <div class="features-strip">
+      <div class="feat-box">
+        <h4>Grounded RAG</h4>
+        <p>Responses strictly grounded in mode-scoped knowledge docs with direct source attribution.</p>
+      </div>
+      <div class="feat-box">
+        <h4>Zero-PII Leakage</h4>
+        <p>Automatic client and server regex masking of emails, phones, and credit cards before external API calls.</p>
+      </div>
+      <div class="feat-box">
+        <h4>Audit Logs &amp; HMAC</h4>
+        <p>Every admin sign-in, knowledge edit, and deletion is cryptographically tracked in SQLite audit trails.</p>
+      </div>
+      <div class="feat-box">
+        <h4>Pure Python &amp; Docker</h4>
+        <p>Zero C++ compiler bloat. Lightweight Python 3.12/3.15 stack deploys anywhere in seconds.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
   <footer>
-    Powered by Owfy AI Support Platform · Try the floating widget in the bottom-right corner
+    <div class="footer-inner">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <div class="mark" style="width:24px; height:24px; font-size:11px;">O</div>
+        <span>Powered by <strong>Owfy Support Platform</strong> · Quiet-Tech AI Architecture</span>
+      </div>
+      <ul class="footer-links">
+        <li><a href="#models">Models</a></li>
+        <li><a href="#how-it-works">How It Works</a></li>
+        <li><a href="#security">Security</a></li>
+        <li><a href="#pricing">Pricing</a></li>
+        <li><a href="/chat">Chat</a></li>
+        <li><a href="/admin">Admin Console</a></li>
+      </ul>
+      <div class="status-badge">
+        <span class="status-dot"></span>
+        <span>All Systems Operational</span>
+      </div>
+    </div>
   </footer>
 
+  <!-- Dynamic Branding & Settings Script -->
   <script>
     fetch("/api/public/settings").then(r => r.json()).then(d => {
-      if (d.business_name) {
+      if (d && d.business_name) {
         document.getElementById("brand-name").textContent = d.business_name + " AI";
         document.getElementById("brand-mark").textContent = d.business_name[0].toUpperCase();
       }
     }).catch(() => {});
   </script>
+  <!-- Universal Floating Widget Embed -->
   <script src="/widget.js" defer></script>
 </body>
 </html>

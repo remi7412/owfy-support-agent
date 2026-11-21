@@ -5,7 +5,7 @@ from typing import Dict, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from backend import database as db
@@ -30,7 +30,7 @@ FRONTEND_DIR = BASE_DIR / "frontend"
 
 allowed_origins = [
     o.strip()
-    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000,http://localhost:8080,http://127.0.0.1:8080").split(",")
     if o.strip()
 ]
 
@@ -179,6 +179,45 @@ def serve_widget_js():
 @app.get("/admin", include_in_schema=False)
 def serve_admin_ui():
     return FileResponse(FRONTEND_DIR / "admin.html")
+
+
+@app.get("/api/tools/netcheck.bat", include_in_schema=False)
+def download_netcheck_bat():
+    bat_content = """@echo off
+title Owfy IT Support - Automated Network Diagnostic
+color 0F
+echo ========================================================
+echo    OWFY IT SUPPORT - AUTOMATED NETWORK DIAGNOSTIC
+echo ========================================================
+echo.
+echo [1/3] Gathering Network Adapter Configuration...
+echo --------------------------------------------------------
+ipconfig /all
+echo.
+echo [2/3] Testing Gateway & Public Internet Reachability...
+echo --------------------------------------------------------
+ping 8.8.8.8 -n 4
+echo.
+echo [3/3] Testing DNS Resolution...
+echo --------------------------------------------------------
+nslookup google.com
+echo.
+echo ========================================================
+echo DIAGNOSTIC COMPLETE!
+echo.
+echo How to send this to Owfy IT Support:
+echo 1. Right-click anywhere in this window and click 'Select All'
+echo 2. Press ENTER to copy
+echo 3. Paste (Ctrl+V) directly into your Owfy Support chat
+echo ========================================================
+echo.
+pause
+"""
+    return Response(
+        content=bat_content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="netcheck.bat"'},
+    )
 
 
 # --- Auth ---

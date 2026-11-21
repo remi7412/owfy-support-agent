@@ -386,7 +386,7 @@
       }
     }
 
-    function renderActionCard(card) {
+    function renderActionCard(card, msgId) {
       if (!card) return null;
       const box = document.createElement("div");
       box.className = "action-card";
@@ -408,6 +408,231 @@
           </div>
           <div style="color:var(--muted);">${escHtml(b.preferred_date)} at ${escHtml(b.preferred_time)} (${escHtml(b.call_mode.replace("_", " "))})</div>
         `;
+      } else if (card.type === "it_diagnostic") {
+        const d = card.data || {};
+        const steps = Array.isArray(d.steps) && d.steps.length ? d.steps : [
+          {
+            step_number: 1,
+            title: "Basic Connectivity Check",
+            instruction: "Verify network cables and wireless adapter status.",
+            command: "ipconfig /all",
+            expected_result: "Valid network IP configuration."
+          }
+        ];
+        const sev = (d.severity || "P3").toUpperCase();
+        const isP1 = Boolean(d.is_p1_outage || sev === "P1");
+
+        const sevColors = {
+          P1: { bg: "#fee2e2", text: "#991b1b", border: "#fca5a5" },
+          P2: { bg: "#ffedd5", text: "#9a3412", border: "#fdba74" },
+          P3: { bg: "#dbeafe", text: "#1e40af", border: "#bfdbfe" },
+          P4: { bg: "#f3f4f6", text: "#4b5563", border: "#e5e7eb" }
+        };
+        const sc = sevColors[sev] || sevColors.P3;
+
+        let activeIdx = 0;
+        let isResolved = false;
+
+        box.style.border = isP1 ? "1px solid #f87171" : "1px solid var(--border)";
+        box.style.background = isP1 ? "#fffafa" : "var(--bg)";
+
+        function renderCardContent() {
+          if (isResolved) {
+            box.innerHTML = `
+              <div style="background:#dcfce7; color:#166534; padding:12px 14px; border-radius:8px; font-weight:600; font-size:13px; display:flex; align-items:center; gap:8px; border:1px solid #bbf7d0;">
+                <span style="font-size:16px;">🎉</span>
+                <span>Issue marked as resolved at Step ${activeIdx + 1} (${escHtml(steps[activeIdx]?.title || 'Diagnostic')})! Thank you for verifying.</span>
+              </div>
+            `;
+            return;
+          }
+
+          const currStep = steps[activeIdx] || steps[0];
+          const isLastStep = activeIdx >= steps.length - 1;
+
+          // Flowchart SVG calculations
+          const svgW = 460;
+          const svgH = 58;
+          const numSteps = steps.length;
+          let svgNodes = "";
+
+          // Connectors
+          for (let i = 0; i < numSteps - 1; i++) {
+            const x1 = 34 + i * ((svgW - 68) / Math.max(1, numSteps - 1)) + 14;
+            const x2 = 34 + (i + 1) * ((svgW - 68) / Math.max(1, numSteps - 1)) - 14;
+            const stroke = i < activeIdx ? "#166534" : "#e6e4de";
+            svgNodes += `<line x1="${x1}" y1="20" x2="${x2}" y2="20" stroke="${stroke}" stroke-width="2.5" />`;
+          }
+
+          // Step Circles & Titles
+          for (let i = 0; i < numSteps; i++) {
+            const cx = 34 + i * ((svgW - 68) / Math.max(1, numSteps - 1));
+            const cy = 20;
+            const isCompleted = i < activeIdx;
+            const isActive = i === activeIdx;
+            const rawTitle = steps[i].title || `Step ${i + 1}`;
+            const shortTitle = rawTitle.length > 13 ? rawTitle.slice(0, 12) + "…" : rawTitle;
+
+            let circleFill = "#faf9f6";
+            let circleStroke = "#d1d5db";
+            let textFill = "#6b7280";
+            let nodeContent = `${i + 1}`;
+
+            if (isCompleted) {
+              circleFill = "#166534";
+              circleStroke = "#166534";
+              textFill = "#ffffff";
+              nodeContent = "✓";
+            } else if (isActive) {
+              circleFill = "#141413";
+              circleStroke = "#141413";
+              textFill = "#ffffff";
+            }
+
+            svgNodes += `
+              <g class="flow-node" data-idx="${i}" style="cursor:pointer;">
+                ${isActive ? `<circle cx="${cx}" cy="${cy}" r="17" fill="none" stroke="#141413" stroke-width="1.5" stroke-dasharray="3,3" />` : ""}
+                <circle cx="${cx}" cy="${cy}" r="13" fill="${circleFill}" stroke="${circleStroke}" stroke-width="1.5" />
+                <text x="${cx}" y="${cy + 4}" font-size="${isCompleted ? '12' : '10.5'}" font-weight="700" fill="${textFill}" text-anchor="middle">${nodeContent}</text>
+                <text x="${cx}" y="45" font-size="9" font-weight="${isActive ? '700' : '500'}" fill="${isActive ? '#141413' : '#6b7280'}" text-anchor="middle">${escHtml(shortTitle)}</text>
+              </g>
+            `;
+          }
+
+          box.innerHTML = `
+            <div class="action-card-title" style="margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
+              <div style="display:flex; align-items:center; gap:8px;">
+                <span style="font-weight:700; color:var(--ink);">🛠️ ${escHtml(d.issue_title || 'IT Diagnostic Flow')}</span>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="badge" style="background:${sc.bg}; color:${sc.text}; border-color:${sc.border}; font-weight:700;">${sev}</span>
+                ${isP1 ? `<span class="badge" style="background:#fee2e2; color:#991b1b; border-color:#fca5a5; font-weight:700;">🚨 Critical Outage</span>` : ""}
+              </div>
+            </div>
+
+            <!-- SVG Flowchart -->
+            <div style="overflow-x:auto; padding:2px 0 6px 0;">
+              <svg viewBox="0 0 ${svgW} ${svgH}" style="width:100%; min-width:320px; height:${svgH}px; display:block;">
+                ${svgNodes}
+              </svg>
+            </div>
+
+            <!-- Active Step Box -->
+            <div style="background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:12px; margin-top:6px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                <span style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted);">
+                  Step ${activeIdx + 1} of ${steps.length}
+                </span>
+                <span style="font-size:12.5px; font-weight:600; color:var(--ink);">
+                  ${escHtml(currStep.title)}
+                </span>
+              </div>
+              <div style="font-size:13px; color:var(--ink); line-height:1.5; margin:6px 0;">
+                ${escHtml(currStep.instruction)}
+              </div>
+
+              ${currStep.command ? `
+                <div style="background:#141413; color:#f8fafc; border-radius:6px; padding:8px 10px; margin:8px 0; font-family:ui-monospace,Consolas,monospace; font-size:12px; display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                  <code style="background:transparent; color:#f8fafc; user-select:all; word-break:break-all; font-family:inherit;">$ ${escHtml(currStep.command)}</code>
+                  <button type="button" class="btn btn-copy-cli" style="background:#27272a; color:#fff; border:none; padding:3px 9px; font-size:11px; flex-shrink:0; cursor:pointer; border-radius:4px;">
+                    Copy
+                  </button>
+                </div>
+              ` : ""}
+
+              <div style="font-size:12px; color:var(--muted); background:var(--accent-soft); padding:6px 9px; border-radius:6px; border-left:3px solid var(--border); margin-top:6px;">
+                <strong style="color:var(--ink);">Expected:</strong> ${escHtml(currStep.expected_result)}
+              </div>
+            </div>
+
+            <!-- Windows Net Check .bat script download -->
+            <div style="margin-top:10px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <a href="/api/tools/netcheck.bat" download="netcheck.bat" class="btn" style="font-size:11.5px; padding:5px 10px; text-decoration:none; display:inline-flex; align-items:center; gap:5px; background:var(--surface); border:1px solid var(--border); color:var(--ink); border-radius:6px;">
+                📥 Download Windows Net Check (.bat)
+              </a>
+              <span style="font-size:11px; color:var(--muted);">Safe read-only script. Run it &amp; paste output into chat.</span>
+            </div>
+
+            <!-- Interactive Progression Buttons -->
+            <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+              <button type="button" class="btn btn-fixed-it" style="background:#166534; color:#fff; border:none; font-size:12px; padding:6px 12px; border-radius:6px; font-weight:600; cursor:pointer;">
+                ✅ Fixed It
+              </button>
+              ${!isLastStep ? `
+                <button type="button" class="btn btn-next-step" style="background:var(--ink); color:#fff; border:none; font-size:12px; padding:6px 12px; border-radius:6px; font-weight:600; cursor:pointer;">
+                  Still Broken -> Next Step
+                </button>
+              ` : ""}
+              ${(isLastStep || isP1) ? `
+                <button type="button" class="btn btn-escalate-it" style="background:#991b1b; color:#fff; border:none; font-size:12px; padding:6px 12px; border-radius:6px; font-weight:600; cursor:pointer;">
+                  🚨 Escalate to Human IT
+                </button>
+              ` : ""}
+            </div>
+          `;
+
+          // Setup interactions
+          const copyBtn = box.querySelector(".btn-copy-cli");
+          if (copyBtn && currStep.command) {
+            copyBtn.onclick = () => {
+              navigator.clipboard.writeText(currStep.command).then(() => {
+                copyBtn.textContent = "Copied!";
+                setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
+              });
+            };
+          }
+
+          const fixedBtn = box.querySelector(".btn-fixed-it");
+          if (fixedBtn) {
+            fixedBtn.onclick = () => {
+              isResolved = true;
+              renderCardContent();
+              if (msgId) {
+                fetch("/api/feedback", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ message_id: msgId, rating: 1 })
+                }).catch(() => {});
+              }
+            };
+          }
+
+          const nextBtn = box.querySelector(".btn-next-step");
+          if (nextBtn) {
+            nextBtn.onclick = () => {
+              if (activeIdx < steps.length - 1) {
+                activeIdx++;
+                renderCardContent();
+              }
+            };
+          }
+
+          const escBtn = box.querySelector(".btn-escalate-it");
+          if (escBtn) {
+            escBtn.onclick = () => {
+              const subj = `[${sev}] ${d.issue_title || 'IT Diagnostic'} - Escalated from Diagnostics`;
+              const stepsSummary = steps.map((s, idx) =>
+                `- Step ${idx + 1} (${s.title}): ${idx <= activeIdx ? 'Attempted (Failed)' : 'Pending'}`
+              ).join("\n");
+              const notes = `Issue: ${d.issue_title || 'Technical Issue'} (Severity: ${sev})\n` +
+                `Attempted AI Diagnostic Steps:\n${stepsSummary}\n\n` +
+                `Result: Issue remains unresolved after guided diagnostics. Requesting human L2 IT engineer support.`;
+              openTicketModal(subj, notes);
+            };
+          }
+
+          box.querySelectorAll(".flow-node").forEach(nodeEl => {
+            nodeEl.onclick = () => {
+              const targetIdx = parseInt(nodeEl.getAttribute("data-idx"), 10);
+              if (!isNaN(targetIdx) && targetIdx >= 0 && targetIdx < steps.length) {
+                activeIdx = targetIdx;
+                renderCardContent();
+              }
+            };
+          });
+        }
+
+        renderCardContent();
       }
       return box;
     }
@@ -504,7 +729,7 @@
         body.className = "md-body";
         body.innerHTML = renderMarkdown(content);
         div.appendChild(body);
-        const cardEl = renderActionCard(actionCard);
+        const cardEl = renderActionCard(actionCard, msgId);
         if (cardEl) div.appendChild(cardEl);
         if (speak && ttsEnabled && "speechSynthesis" in window) {
           window.speechSynthesis.cancel();
@@ -640,7 +865,15 @@
       loadHistory();
     }
 
-    function openTicketModal() { document.getElementById("ticket-modal").style.display = "grid"; }
+    function openTicketModal(subject, summary) {
+      if (typeof subject === "string") {
+        document.getElementById("t-subject").value = subject;
+      }
+      if (typeof summary === "string") {
+        document.getElementById("t-summary").value = summary;
+      }
+      document.getElementById("ticket-modal").style.display = "grid";
+    }
     function openBookingModal() {
       document.getElementById("b-date").value = new Date().toISOString().split("T")[0];
       document.getElementById("booking-modal").style.display = "grid";
@@ -664,6 +897,8 @@
       });
       const data = await res.json();
       closeModal("ticket-modal");
+      document.getElementById("t-subject").value = "";
+      document.getElementById("t-summary").value = "";
       appendMessage("assistant", res.ok ? `Ticket #${data.ticket.id} created (${data.ticket.email_note}).` : (data.detail || "Could not submit ticket."));
     }
 
