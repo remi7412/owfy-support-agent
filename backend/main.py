@@ -2,13 +2,14 @@ import os
 from pathlib import Path
 from typing import Dict, Optional
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend import database as db
 from backend.emailer import send_escalation_email
+from backend.ingest import extract_pdf_content, fetch_website_content
 from backend.llm import generate_support_reply
 from backend.rag import retrieve_relevant_chunks
 from backend.security import (
@@ -69,6 +70,13 @@ class KnowledgePayload(BaseModel):
     category: str = "General"
     mode_scope: str = "all"
     content: str = Field(..., min_length=1)
+
+
+class ImportUrlPayload(BaseModel):
+    url: str = Field(..., min_length=4)
+    category: str = "Web"
+    mode_scope: str = "all"
+    custom_title: Optional[str] = None
 
 
 class TicketPayload(BaseModel):
@@ -317,6 +325,54 @@ def remove_knowledge(doc_id: int, _: str = Depends(require_admin)):
 def search_knowledge(q: str, _: str = Depends(require_admin)):
     docs = db.list_knowledge_docs()
     return {"results": retrieve_relevant_chunks(q, docs, top_k=5)}
+
+
+@app.post("/api/knowledge/import-url")
+async def import_knowledge_from_url(payload: ImportUrlPayload, _: str = Depends(require_admin)):
+    try:
+        title, content = await fetch_website_content(payload.url)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"Web extraction error: {err}")
+
+    final_title = payload.custom_title.strip() if payload.custom_title else title
+    doc = db.add_knowledge_doc(
+        title=final_title,
+        category=payload.category,
+        content=content,
+        mode_scope=payload.mode_scope,
+    )
+    return {"doc": doc, "chars": len(content)}
+
+
+@app.post("/api/knowledge/import-pdf")
+async def import_knowledge_from_pdf(
+    file: UploadFile = File(...),
+    category: str = Form("Manual"),
+    mode_scope: str = Form("all"),
+    custom_title: Optional[str] = Form(None),
+    _: str = Depends(require_admin),
+):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only .pdf files are supported")
+
+    try:
+        file_bytes = await file.read()
+        title, content, pages = extract_pdf_content(file_bytes, filename=file.filename)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"PDF extraction error: {err}")
+
+    final_title = custom_title.strip() if custom_title else title
+    doc = db.add_knowledge_doc(
+        title=final_title,
+        category=category,
+        content=content,
+        mode_scope=mode_scope,
+    )
+    return {"doc": doc, "pages": pages, "chars": len(content)}
 
 
 @app.get("/api/tickets")

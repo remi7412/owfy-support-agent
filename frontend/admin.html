@@ -185,9 +185,62 @@
     </div>
 
     <div id="tab-knowledge" class="section">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));gap:16px;margin-bottom:18px;">
+        <div class="card form-grid">
+          <h2 style="font-size:15px;display:flex;align-items:center;gap:6px;">
+            <span>🌐</span> 1-Click Website URL Training
+          </h2>
+          <p style="font-size:12px;color:var(--muted);">Scrape, clean, and train AI on any public docs, pricing, or FAQ page.</p>
+          <div><label>Website / Documentation URL</label><input id="kb-import-url" type="url" placeholder="https://docs.owfy.io/faq" /></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <label>Category</label>
+              <input id="kb-url-cat" value="Website" />
+            </div>
+            <div>
+              <label>Scope</label>
+              <select id="kb-url-scope">
+                <option value="all">All Modes</option>
+                <option value="it_support">IT Support</option>
+                <option value="business_booking">Local Business</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary" type="button" id="btn-fetch-url" onclick="trainFromUrl()">Fetch &amp; Train</button>
+          <div id="url-status" style="font-size:12px;color:var(--muted);"></div>
+        </div>
+
+        <div class="card form-grid">
+          <h2 style="font-size:15px;display:flex;align-items:center;gap:6px;">
+            <span>📄</span> PDF Knowledge Training
+          </h2>
+          <p style="font-size:12px;color:var(--muted);">Upload PDF manuals, SOP guides, or rate sheets for instant RAG indexing.</p>
+          <div>
+            <label>Select PDF Document</label>
+            <input type="file" id="kb-pdf-file" accept=".pdf" />
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <label>Category</label>
+              <input id="kb-pdf-cat" value="PDF Manual" />
+            </div>
+            <div>
+              <label>Scope</label>
+              <select id="kb-pdf-scope">
+                <option value="all">All Modes</option>
+                <option value="it_support">IT Support</option>
+                <option value="business_booking">Local Business</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn btn-primary" type="button" id="btn-upload-pdf" onclick="trainFromPdf()">Upload &amp; Train PDF</button>
+          <div id="pdf-status" style="font-size:12px;color:var(--muted);"></div>
+        </div>
+      </div>
+
       <div class="grid-2">
         <form class="card form-grid" onsubmit="saveKnowledge(event)">
-          <h2 style="font-size:15px;">Add Knowledge Article</h2>
+          <h2 style="font-size:15px;">Manual Knowledge Article</h2>
           <div class="file-drop">
             <label style="margin-bottom:6px;">Import from file (.txt, .md, .csv, .json)</label>
             <input type="file" id="kb-file" accept=".txt,.md,.csv,.json" onchange="loadKnowledgeFile(event)" style="border:none;padding:0;background:transparent;" />
@@ -453,6 +506,81 @@
       });
       e.target.reset();
       refreshAll();
+    }
+
+    async function trainFromUrl() {
+      const url = document.getElementById("kb-import-url").value.trim();
+      const cat = document.getElementById("kb-url-cat").value.trim() || "Website";
+      const scope = document.getElementById("kb-url-scope").value;
+      const statusEl = document.getElementById("url-status");
+      const btn = document.getElementById("btn-fetch-url");
+
+      if (!url) {
+        statusEl.textContent = "Please enter a valid website URL.";
+        return;
+      }
+      statusEl.textContent = "Fetching webpage and extracting content...";
+      btn.disabled = true;
+
+      try {
+        const res = await apiFetch("/api/knowledge/import-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: url, category: cat, mode_scope: scope })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = "Error: " + (data.detail || "Failed to import URL.");
+        } else {
+          statusEl.textContent = `Trained: "${data.doc.title}" (${data.chars} chars added).`;
+          document.getElementById("kb-import-url").value = "";
+          refreshAll();
+        }
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function trainFromPdf() {
+      const fileInput = document.getElementById("kb-pdf-file");
+      const file = fileInput.files[0];
+      const cat = document.getElementById("kb-pdf-cat").value.trim() || "PDF Manual";
+      const scope = document.getElementById("kb-pdf-scope").value;
+      const statusEl = document.getElementById("pdf-status");
+      const btn = document.getElementById("btn-upload-pdf");
+
+      if (!file) {
+        statusEl.textContent = "Please select a .pdf file.";
+        return;
+      }
+      statusEl.textContent = "Extracting text from PDF pages...";
+      btn.disabled = true;
+
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append("category", cat);
+        formData.append("mode_scope", scope);
+
+        const res = await apiFetch("/api/knowledge/import-pdf", {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          statusEl.textContent = "Error: " + (data.detail || "Failed to process PDF.");
+        } else {
+          statusEl.textContent = `Trained: "${data.doc.title}" (${data.pages} pages, ${data.chars} chars).`;
+          fileInput.value = "";
+          refreshAll();
+        }
+      } catch (err) {
+        statusEl.textContent = "Error: " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
     }
 
     async function testRag() {
