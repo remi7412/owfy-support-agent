@@ -18,10 +18,16 @@ Enterprise AI customer support platform built with **Python FastAPI**, **Groq AP
 - **Tool Calling**:
   - `lookup_tracking`: Real-time order and IT ticket tracking (e.g. `OWF-1001`, `IT-2045`).
   - `create_booking`: Direct booking creation into SQLite database.
+- **Enterprise Upgrades (v7.5)**:
+  - **1-Click Website URL & PDF Training**: Auto-extract and vectorize text from public doc URLs (`httpx` + HTMLParser) and PDF files (`pypdf`).
+  - **True Multi-Tenancy**: Tenant-scoped RAG, prompt customization, dynamic branding, and embed tag `<script src="/widget.js" data-tenant="acme"></script>`.
+  - **Live Human Takeover**: Real-time admin takeover from `/admin` Memory with AI bypass and client-side chat polling.
+  - **Webhook Alerts & Outbound Voice Hook**: Dispatches HMAC-signed webhooks on tickets and bookings; triggers Twilio / Vapi outbound voice calls on confirmed callbacks.
+  - **Resolution Analytics & Audit Trail**: AI Resolution Rate % KPI, tamper-evident audit logs, and prompt-injection guardrails.
 - **Channels & Frontend**:
   - `/` — Quiet-Tech landing page with 3 mode showcases and interactive demo launcher.
   - `/chat` — Dedicated chat UI with Markdown, Web Speech mic input / TTS voice replies, action cards, and CSAT feedback.
-  - `/admin` — Protected administrative dashboard managing Tickets, Bookings & Calls, Tracking, Memory, Knowledge Base, and System Settings.
+  - `/admin` — Protected administrative dashboard with Tickets, Bookings & Calls, Tracking, Memory (Takeover), Knowledge Base, Tenants, Audit Log, and Settings.
   - `/widget.js` — Single-line embeddable floating chat widget for external websites.
 
 ---
