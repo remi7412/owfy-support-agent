@@ -1,0 +1,13 @@
+services:
+  support-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - support_data:/data
+    restart: unless-stopped
+
+volumes:
+  support_data:

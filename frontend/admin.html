@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Dashboard — AI Customer Support</title>
+  <style>
+    :root {
+      --bg: #faf9f6;
+      --surface: #ffffff;
+      --ink: #141413;
+      --muted: #6b6a65;
+      --border: #e6e4de;
+      --soft: #f3f2ee;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--ink); min-height: 100vh;
+    }
+    header {
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      padding: 14px 24px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
+    }
+    header h1 { font-size: 16px; font-weight: 600; }
+    .nav { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tab-btn, .btn {
+      font-size: 12.5px; padding: 7px 12px; border-radius: 8px;
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--ink); cursor: pointer; text-decoration: none;
+    }
+    .tab-btn.active, .btn-primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .container { max-width: 1140px; margin: 24px auto; padding: 0 20px; }
+    .kpis {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+      gap: 14px; margin-bottom: 22px;
+    }
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 18px;
+    }
+    .kpi-label { font-size: 12px; color: var(--muted); }
+    .kpi-val { font-size: 22px; font-weight: 600; margin-top: 4px; }
+    .section { display: none; }
+    .section.active { display: block; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { font-size: 12px; color: var(--muted); font-weight: 500; }
+    select, input, textarea {
+      font-family: inherit; font-size: 13px; padding: 7px 10px;
+      border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+    }
+    .grid-2 { display: grid; grid-template-columns: 340px 1fr; gap: 16px; }
+    .session-item { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; font-size: 13px; }
+    .session-item:hover, .session-item.active { background: var(--soft); }
+    .msg-row { margin-bottom: 10px; padding: 10px 12px; border-radius: 8px; font-size: 13px; }
+    .msg-row.user { background: var(--soft); }
+    .msg-row.assistant { background: #fff; border: 1px solid var(--border); }
+    .form-grid { display: grid; gap: 12px; max-width: 640px; }
+    .form-grid label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 4px; }
+    .form-grid input, .form-grid textarea, .form-grid select { width: 100%; }
+    .file-drop {
+      border: 1px dashed var(--border); border-radius: 8px; padding: 10px;
+      background: var(--bg); font-size: 12px; color: var(--muted);
+    }
+    .login-overlay {
+      position: fixed; inset: 0; background: var(--bg);
+      display: none; place-items: center; z-index: 100; padding: 16px;
+    }
+    .login-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 14px; padding: 28px; width: 100%; max-width: 380px;
+      display: grid; gap: 14px;
+    }
+    .login-card h2 { font-size: 18px; font-weight: 600; }
+    .login-card input { width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="login-overlay" id="login-overlay">
+    <form class="login-card" onsubmit="login(event)">
+      <h2>Admin Sign In</h2>
+      <p style="font-size:13px;color:var(--muted);">Enter your administrator credentials from <code>.env</code>.</p>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px;">Username</label>
+        <input id="login-user" required value="admin" />
+      </div>
+      <div>
+        <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:4px;">Password</label>
+        <input id="login-pass" type="password" required placeholder="••••••••" />
+      </div>
+      <div id="login-err" style="font-size:12px;color:#b91c1c;"></div>
+      <button class="btn btn-primary" type="submit">Sign In</button>
+    </form>
+  </div>
+
+  <header>
+    <h1>Support Agent Admin</h1>
+    <div class="nav">
+      <button class="tab-btn active" onclick="switchTab('tickets', this)">Tickets</button>
+      <button class="tab-btn" onclick="switchTab('bookings', this)">Bookings &amp; Calls</button>
+      <button class="tab-btn" onclick="switchTab('tracking', this)">Tracking</button>
+      <button class="tab-btn" onclick="switchTab('sessions', this)">Memory</button>
+      <button class="tab-btn" onclick="switchTab('knowledge', this)">Knowledge</button>
+      <button class="tab-btn" onclick="switchTab('settings', this)">Settings</button>
+      <a class="btn" href="/chat">Chat UI</a>
+      <a class="btn" href="/">Landing</a>
+      <button class="btn" onclick="logout()">Sign Out</button>
+    </div>
+  </header>
+
+  <div class="container">
+    <div class="kpis">
+      <div class="card"><div class="kpi-label">Sessions</div><div class="kpi-val" id="kpi-sessions">0</div></div>
+      <div class="card"><div class="kpi-label">Open Tickets</div><div class="kpi-val" id="kpi-tickets">0</div></div>
+      <div class="card"><div class="kpi-label">Pending Bookings</div><div class="kpi-val" id="kpi-bookings">0</div></div>
+      <div class="card"><div class="kpi-label">CSAT Helpful</div><div class="kpi-val" id="kpi-csat">100%</div></div>
+      <div class="card"><div class="kpi-label">Agent Mode</div><div class="kpi-val" id="kpi-mode" style="font-size:15px;margin-top:8px;">—</div></div>
+    </div>
+
+    <div id="tab-tickets" class="section active card">
+      <h2 style="font-size:15px;margin-bottom:12px;">Escalated Support Tickets</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Customer</th><th>Subject</th><th>Email Status</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="tickets-body"></tbody>
+      </table>
+    </div>
+
+    <div id="tab-bookings" class="section card">
+      <h2 style="font-size:15px;margin-bottom:12px;">Service Bookings &amp; Voice Callbacks</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Customer</th><th>Service &amp; Mode</th><th>When</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="bookings-body"></tbody>
+      </table>
+    </div>
+
+    <div id="tab-tracking" class="section">
+      <div class="grid-2">
+        <form class="card form-grid" onsubmit="saveTrackable(event)">
+          <h2 style="font-size:15px;">Add / Update Tracking Code</h2>
+          <div><label>Tracking Code</label><input id="tr-code" required placeholder="OWF-1002" /></div>
+          <div><label>Customer Name</label><input id="tr-cust" required placeholder="Acme Corp" /></div>
+          <div><label>Item / Ticket Title</label><input id="tr-title" required placeholder="AI Chatbot Setup" /></div>
+          <div>
+            <label>Category</label>
+            <select id="tr-cat">
+              <option value="order">Order</option>
+              <option value="project">Project</option>
+              <option value="it_ticket">IT Ticket</option>
+            </select>
+          </div>
+          <div>
+            <label>Status</label>
+            <select id="tr-status">
+              <option value="received">Received</option>
+              <option value="in_progress">In Progress</option>
+              <option value="scheduled">Scheduled</option>
+              <option value="completed">Completed</option>
+            </select>
+          </div>
+          <div><label>ETA</label><input id="tr-eta" value="Tomorrow 3:00 PM" /></div>
+          <div><label>Latest Update</label><textarea id="tr-update" rows="2" required placeholder="Engineer assigned..."></textarea></div>
+          <button class="btn btn-primary" type="submit">Save Tracking</button>
+        </form>
+        <div class="card">
+          <h2 style="font-size:15px;margin-bottom:12px;">Active Tracked Items</h2>
+          <table>
+            <thead><tr><th>Code</th><th>Item</th><th>Status &amp; ETA</th><th>Last Update</th><th>Action</th></tr></thead>
+            <tbody id="tracking-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-sessions" class="section grid-2">
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div style="padding:12px 14px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;">Sessions</div>
+        <div id="sessions-list"></div>
+      </div>
+      <div class="card">
+        <div style="font-weight:600;font-size:13px;margin-bottom:12px;">Conversation Memory Transcript</div>
+        <div id="session-transcript" style="color:var(--muted);font-size:13px;">Select a session to inspect memory.</div>
+      </div>
+    </div>
+
+    <div id="tab-knowledge" class="section">
+      <div class="grid-2">
+        <form class="card form-grid" onsubmit="saveKnowledge(event)">
+          <h2 style="font-size:15px;">Add Knowledge Article</h2>
+          <div class="file-drop">
+            <label style="margin-bottom:6px;">Import from file (.txt, .md, .csv, .json)</label>
+            <input type="file" id="kb-file" accept=".txt,.md,.csv,.json" onchange="loadKnowledgeFile(event)" style="border:none;padding:0;background:transparent;" />
+          </div>
+          <div><label>Title</label><input id="kb-title" required placeholder="Refund Policy" /></div>
+          <div><label>Category</label><input id="kb-cat" value="General" /></div>
+          <div>
+            <label>Mode Scope</label>
+            <select id="kb-scope">
+              <option value="all">All Modes</option>
+              <option value="it_support">IT Support Only</option>
+              <option value="business_booking">Local Business Only</option>
+            </select>
+          </div>
+          <div><label>Content</label><textarea id="kb-content" rows="5" required placeholder="Paste business facts, pricing, or IT SOPs..."></textarea></div>
+          <button class="btn btn-primary" type="submit">Save Article</button>
+        </form>
+        <div class="card">
+          <div style="display:flex;gap:8px;margin-bottom:14px;">
+            <input id="kb-test-q" style="flex:1;" placeholder="Test RAG retrieval query..." />
+            <button class="btn" onclick="testRag()">Test Search</button>
+          </div>
+          <div id="rag-preview" style="font-size:12px;color:var(--muted);margin-bottom:14px;"></div>
+          <table>
+            <thead><tr><th>Title</th><th>Scope</th><th>Action</th></tr></thead>
+            <tbody id="kb-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="tab-settings" class="section card">
+      <form class="form-grid" onsubmit="saveSettings(event)">
+        <h2 style="font-size:15px;">Agent &amp; Groq Configuration</h2>
+        <div><label>Business Name</label><input id="set-biz" /></div>
+        <div>
+          <label>Default Agent Mode</label>
+          <select id="set-mode">
+            <option value="hybrid">Hybrid (IT Support + Business Booking &amp; Tracking)</option>
+            <option value="it_support">IT Support Specialist (L1/L2 Triage)</option>
+            <option value="business_booking">Local Business &amp; Booking Concierge</option>
+          </select>
+        </div>
+        <div>
+          <label>Groq Model (Active Free/Developer Tier)</label>
+          <select id="set-model">
+            <option value="openai/gpt-oss-20b">openai/gpt-oss-20b (Fast)</option>
+            <option value="openai/gpt-oss-120b">openai/gpt-oss-120b (Reasoning)</option>
+            <option value="qwen/qwen3.6-27b">qwen/qwen3.6-27b</option>
+          </select>
+        </div>
+        <div><label>Support Escalation Email</label><input id="set-email" type="email" /></div>
+        <div><label>System Prompt ({business_name} supported)</label><textarea id="set-prompt" rows="5"></textarea></div>
+        <button class="btn btn-primary" type="submit">Save Settings</button>
+        <div id="settings-msg" style="font-size:12px;color:var(--muted);"></div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    function getToken() { return localStorage.getItem("owfy_admin_token") || ""; }
+    function showLogin() { document.getElementById("login-overlay").style.display = "grid"; }
+    function hideLogin() { document.getElementById("login-overlay").style.display = "none"; }
+
+    async function apiFetch(url, options = {}) {
+      const headers = { ...(options.headers || {}), Authorization: "Bearer " + getToken() };
+      const res = await fetch(url, { ...options, headers });
+      if (res.status === 401) {
+        localStorage.removeItem("owfy_admin_token");
+        showLogin();
+        throw new Error("Unauthorized");
+      }
+      return res;
+    }
+
+    async function login(e) {
+      e.preventDefault();
+      document.getElementById("login-err").textContent = "";
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: document.getElementById("login-user").value,
+          password: document.getElementById("login-pass").value
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById("login-err").textContent = data.detail || "Login failed";
+        return;
+      }
+      localStorage.setItem("owfy_admin_token", data.access_token);
+      hideLogin();
+      refreshAll();
+    }
+
+    function logout() { localStorage.removeItem("owfy_admin_token"); showLogin(); }
+
+    function switchTab(name, btn) {
+      document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+      document.getElementById("tab-" + name).classList.add("active");
+      btn.classList.add("active");
+    }
+
+    async function loadKnowledgeFile(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const text = await file.text();
+      if (!document.getElementById("kb-title").value.trim()) {
+        document.getElementById("kb-title").value = file.name.replace(/\.[^.]+$/, "");
+      }
+      document.getElementById("kb-content").value = text;
+    }
+
+    async function refreshAll() {
+      if (!getToken()) { showLogin(); return; }
+      try {
+        const [tRes, bRes, trRes, sRes, kRes, setRes] = await Promise.all([
+          apiFetch("/api/tickets"), apiFetch("/api/bookings"), apiFetch("/api/trackables"),
+          apiFetch("/api/sessions"), apiFetch("/api/knowledge"), apiFetch("/api/settings")
+        ]);
+        const tickets = (await tRes.json()).tickets;
+        const bookings = (await bRes.json()).bookings;
+        const trackables = (await trRes.json()).items;
+        const sData = await sRes.json();
+        const sessions = sData.sessions;
+        const fb = sData.feedback || { csat_pct: 100 };
+        const docs = (await kRes.json()).docs;
+        const settings = (await setRes.json()).settings;
+
+        document.getElementById("kpi-sessions").textContent = sessions.length;
+        document.getElementById("kpi-tickets").textContent = tickets.filter(t => t.status !== "resolved").length;
+        document.getElementById("kpi-bookings").textContent = bookings.filter(b => b.status === "pending").length;
+        document.getElementById("kpi-csat").textContent = fb.csat_pct + "%";
+        document.getElementById("kpi-mode").textContent = settings.agent_mode || "hybrid";
+
+        document.getElementById("tickets-body").innerHTML = tickets.map(t => `
+          <tr>
+            <td>#${t.id}</td>
+            <td>${t.customer_name}<br><span style="color:var(--muted);font-size:12px;">${t.customer_email}</span></td>
+            <td><strong>${t.subject}</strong><br><span style="color:var(--muted);font-size:12px;">${t.summary.slice(0,120)}</span></td>
+            <td style="font-size:12px;color:var(--muted);">${t.email_note}</td>
+            <td>
+              <select onchange="updateTicket(${t.id}, this.value)">
+                <option value="open" ${t.status === 'open' ? 'selected' : ''}>Open</option>
+                <option value="in_progress" ${t.status === 'in_progress' ? 'selected' : ''}>In Progress</option>
+                <option value="resolved" ${t.status === 'resolved' ? 'selected' : ''}>Resolved</option>
+              </select>
+            </td>
+            <td><button class="btn" onclick="deleteItem('/api/tickets/${t.id}')">Delete</button></td>
+          </tr>
+        `).join("") || `<tr><td colspan="6" style="color:var(--muted);">No escalated tickets yet.</td></tr>`;
+
+        document.getElementById("bookings-body").innerHTML = bookings.map(b => `
+          <tr>
+            <td>#${b.id}</td>
+            <td>${b.customer_name}<br><span style="color:var(--muted);font-size:12px;">${b.customer_contact}</span></td>
+            <td><strong>${b.service_type}</strong><br><span style="color:var(--muted);font-size:12px;">${b.call_mode.replace("_", " ")}</span></td>
+            <td>${b.preferred_date}<br><span style="color:var(--muted);font-size:12px;">${b.preferred_time}</span></td>
+            <td>
+              <select onchange="updateBooking(${b.id}, this.value)">
+                <option value="pending" ${b.status === 'pending' ? 'selected' : ''}>Pending</option>
+                <option value="confirmed" ${b.status === 'confirmed' ? 'selected' : ''}>Confirmed</option>
+                <option value="completed" ${b.status === 'completed' ? 'selected' : ''}>Completed</option>
+                <option value="cancelled" ${b.status === 'cancelled' ? 'selected' : ''}>Cancelled</option>
+              </select>
+            </td>
+            <td><button class="btn" onclick="deleteItem('/api/bookings/${b.id}')">Delete</button></td>
+          </tr>
+        `).join("") || `<tr><td colspan="6" style="color:var(--muted);">No bookings yet.</td></tr>`;
+
+        document.getElementById("tracking-body").innerHTML = trackables.map(item => `
+          <tr>
+            <td><strong>${item.tracking_code}</strong><br><span style="font-size:11px;color:var(--muted);">${item.category}</span></td>
+            <td>${item.item_title}<br><span style="font-size:12px;color:var(--muted);">${item.customer_name}</span></td>
+            <td>${item.status.replace("_", " ")}<br><span style="font-size:12px;color:var(--muted);">ETA: ${item.eta}</span></td>
+            <td style="font-size:12px;color:var(--muted);">${item.last_update}</td>
+            <td><button class="btn" onclick="deleteItem('/api/trackables/${item.id}')">Delete</button></td>
+          </tr>
+        `).join("");
+
+        document.getElementById("sessions-list").innerHTML = sessions.map(s => `
+          <div class="session-item" onclick="loadTranscript('${s.id}')">
+            <strong>${s.visitor_name || 'Guest'}</strong> <span style="color:var(--muted);">(${s.message_count} msgs)</span><br>
+            <span style="font-size:11px;color:var(--muted);">${s.id} · ${s.status}</span>
+          </div>
+        `).join("") || `<div style="padding:12px;color:var(--muted);font-size:13px;">No sessions yet.</div>`;
+
+        document.getElementById("kb-body").innerHTML = docs.map(d => `
+          <tr>
+            <td><strong>${d.title}</strong><br><span style="color:var(--muted);font-size:12px;">${d.content.slice(0,100)}...</span></td>
+            <td>${d.category}<br><span style="font-size:11px;color:var(--muted);">${d.mode_scope || 'all'}</span></td>
+            <td><button class="btn" onclick="deleteItem('/api/knowledge/${d.id}')">Delete</button></td>
+          </tr>
+        `).join("");
+
+        document.getElementById("set-biz").value = settings.business_name || "";
+        document.getElementById("set-mode").value = settings.agent_mode || "hybrid";
+        document.getElementById("set-model").value = settings.groq_model || "openai/gpt-oss-20b";
+        document.getElementById("set-email").value = settings.support_email || "";
+        document.getElementById("set-prompt").value = settings.system_prompt || "";
+      } catch (e) {}
+    }
+
+    async function deleteItem(url) {
+      await apiFetch(url, { method: "DELETE" });
+      refreshAll();
+    }
+
+    async function loadTranscript(sessionId) {
+      const res = await apiFetch(`/api/sessions/${sessionId}`);
+      const data = await res.json();
+      document.getElementById("session-transcript").innerHTML = data.messages.map(m => `
+        <div class="msg-row ${m.role}"><strong>${m.role.toUpperCase()}</strong>: ${m.content}</div>
+      `).join("") || "No messages.";
+    }
+
+    async function updateTicket(id, status) {
+      await apiFetch(`/api/tickets/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status })
+      });
+      refreshAll();
+    }
+
+    async function updateBooking(id, status) {
+      await apiFetch(`/api/bookings/${id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status })
+      });
+      refreshAll();
+    }
+
+    async function saveTrackable(e) {
+      e.preventDefault();
+      await apiFetch("/api/trackables", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tracking_code: document.getElementById("tr-code").value,
+          customer_name: document.getElementById("tr-cust").value,
+          item_title: document.getElementById("tr-title").value,
+          category: document.getElementById("tr-cat").value,
+          status: document.getElementById("tr-status").value,
+          eta: document.getElementById("tr-eta").value,
+          last_update: document.getElementById("tr-update").value
+        })
+      });
+      e.target.reset();
+      refreshAll();
+    }
+
+    async function saveKnowledge(e) {
+      e.preventDefault();
+      await apiFetch("/api/knowledge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: document.getElementById("kb-title").value,
+          category: document.getElementById("kb-cat").value,
+          mode_scope: document.getElementById("kb-scope").value,
+          content: document.getElementById("kb-content").value
+        })
+      });
+      e.target.reset();
+      refreshAll();
+    }
+
+    async function testRag() {
+      const q = document.getElementById("kb-test-q").value.trim();
+      if (!q) return;
+      const res = await apiFetch(`/api/knowledge/search?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      document.getElementById("rag-preview").innerHTML = data.results.length
+        ? data.results.map(r => `• <strong>${r.title}</strong> (score: ${r.score}): ${r.content.slice(0,110)}...`).join("<br>")
+        : "No matching chunks found.";
+    }
+
+    async function saveSettings(e) {
+      e.preventDefault();
+      await apiFetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          business_name: document.getElementById("set-biz").value,
+          agent_mode: document.getElementById("set-mode").value,
+          groq_model: document.getElementById("set-model").value,
+          support_email: document.getElementById("set-email").value,
+          system_prompt: document.getElementById("set-prompt").value
+        })
+      });
+      document.getElementById("settings-msg").textContent = "Settings saved.";
+      refreshAll();
+    }
+
+    refreshAll();
+  </script>
+</body>
+</html>

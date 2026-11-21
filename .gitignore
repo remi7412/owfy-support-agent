@@ -1,0 +1,31 @@
+# Environment & Secrets
+.env
+.env*.local
+.env.*
+!.env.example
+
+# Virtual Environments
+.venv/
+.venv*/
+venv/
+ENV/
+
+# Databases & local storage
+*.db
+*.sqlite
+*.sqlite3
+support_agent.db
+
+# Python cache & build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Editor & OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
