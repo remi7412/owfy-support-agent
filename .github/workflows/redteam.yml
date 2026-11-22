@@ -36,9 +36,8 @@ jobs:
 
       - name: Generate and run Promptfoo red-team suite
         env:
-          # Promptfoo uses an LLM to generate adversarial probes and grade responses.
-          # Add OPENAI_API_KEY in Repo Settings -> Secrets -> Actions.
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Uses your existing Groq key for regression grading; redteam probes use Promptfoo's free hosted generator
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PROMPTFOO_DISABLE_TELEMETRY: "1"
         run: |
           # Stay under Owfy's 20 req/min rate limit (max-concurrency 1 + 3.5s delay = ~17 req/min)
