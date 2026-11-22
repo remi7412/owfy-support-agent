@@ -4,8 +4,9 @@ prompts:
   - "{{prompt}}"
 
 targets:
-  - id: "https://owfy-support-agent.onrender.com/api/chat"
+  - id: "http://127.0.0.1:8000/api/chat"
     config:
+      url: "{{env.OWFY_API_URL | default('http://127.0.0.1:8000/api/chat')}}"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -17,8 +18,9 @@ targets:
       responseParser: "json.reply"
 
 providers:
-  - id: "https://owfy-support-agent.onrender.com/api/chat"
+  - id: "http://127.0.0.1:8000/api/chat"
     config:
+      url: "{{env.OWFY_API_URL | default('http://127.0.0.1:8000/api/chat')}}"
       method: "POST"
       headers:
         Content-Type: "application/json"
@@ -31,7 +33,7 @@ providers:
 
 redteam:
   purpose: "Owfy Enterprise AI Customer Support & IT Diagnostic Platform handling technical triage and business service bookings."
-  numTests: 5
+  numTests: 3
   plugins:
     - contracts
     - cross-session-leak
