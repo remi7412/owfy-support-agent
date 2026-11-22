@@ -17,7 +17,7 @@ MODE_INSTRUCTIONS = {
         "2. For L1/L2 individual user technical issues (Wi-Fi/Ethernet connectivity, VPN failure, DNS resolution, printer offline, Outlook/email sync, slow PC, software crashes): "
         "ALWAYS invoke the `render_it_diagnostic_flow` tool first with 3-5 ordered, actionable diagnostic steps before suggesting a ticket. "
         "Withhold [ESCALATE] while walking the user through the diagnostic wizard steps.\n"
-        "3. Step design in `render_it_diagnostic_flow`: each step must contain a clear step title, plain-language instruction, an optional safe Windows command (e.g. 'ipconfig /all', 'ping 8.8.8.8 -n 4', 'tracert 8.8.8.8', 'nslookup google.com', 'ipconfig /flushdns', 'netsh wlan show interfaces'), and expected normal result.\n"
+        "3. Step design in `render_it_diagnostic_flow`: each step must contain a clear step title, plain-language instruction, an optional safe Windows command (e.g. 'ipconfig /all', 'ping 8.8.8.8 -n 4', 'tracert 8.8.8.8', 'nslookup google.com', 'ipconfig /flushdns', 'netsh wlan show interfaces'), and expected normal result. Use single quotes or backticks for menu/button names in instructions (never raw double quotes) so tool call JSON parses reliably.\n"
         "4. Command output diagnosis: when the user pastes command output or error messages, analyze the technical root cause:\n"
         "   - APIPA address (169.254.x.x) -> DHCP server failed to assign an IP. Advise 'ipconfig /release' then 'ipconfig /renew', or checking router DHCP scope.\n"
         "   - Successful ping to 8.8.8.8 but 'nslookup' fails -> DNS failure. Recommend setting DNS to 1.1.1.1 / 8.8.8.8 or running 'ipconfig /flushdns'.\n"
@@ -101,8 +101,14 @@ TOOLS = [
                             "properties": {
                                 "step_number": {"type": "integer"},
                                 "title": {"type": "string", "description": "Short step title, e.g. 'Check Wi-Fi Link' or 'Ping Gateway'"},
-                                "instruction": {"type": "string", "description": "Actionable instructions for the user"},
-                                "command": {"type": "string", "description": "Optional safe CLI command, e.g. 'ipconfig /all' or 'ping 8.8.8.8'"},
+                                "instruction": {
+                                    "type": "string",
+                                    "description": "Actionable instructions for the user (use single quotes or backticks for UI/menu items, avoid unescaped double quotes)",
+                                },
+                                "command": {
+                                    "type": ["string", "null"],
+                                    "description": "Optional safe CLI command, e.g. 'ipconfig /all' or 'ping 8.8.8.8', or null if not applicable.",
+                                },
                                 "expected_result": {"type": "string", "description": "What normal or healthy output looks like"},
                             },
                             "required": ["step_number", "title", "instruction", "expected_result"],
@@ -240,7 +246,7 @@ async def generate_support_reply(
         "tools": TOOLS,
         "tool_choice": "auto",
         "temperature": 0.3,
-        "max_tokens": 700,
+        "max_tokens": 1000,
     }
 
     action_card: Optional[Dict[str, Any]] = None
@@ -269,7 +275,7 @@ async def generate_support_reply(
                 resp2 = await client.post(
                     GROQ_API_URL,
                     headers=headers,
-                    json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 700},
+                    json={"model": model, "messages": messages, "temperature": 0.3, "max_tokens": 1000},
                 )
                 resp2.raise_for_status()
                 raw_reply = (resp2.json()["choices"][0]["message"].get("content") or "").strip()
@@ -288,13 +294,16 @@ async def generate_support_reply(
                     raw_reply = f"Your booking #{action_card['data'].get('id')} has been created."
 
     except httpx.HTTPStatusError as e:
+        err_body = e.response.text if hasattr(e, "response") and e.response is not None else repr(e)
+        print("GROQ_ERROR_DETAIL:", getattr(e, "body", err_body), flush=True)
         return (
             f"I ran into an API error from Groq ({e.response.status_code}). "
             "Please check your `GROQ_API_KEY` or try again—or open an email ticket below.",
             True,
             None,
         )
-    except Exception:
+    except Exception as e:
+        print("GROQ_ERROR_DETAIL:", repr(e), flush=True)
         return (
             "I'm having trouble connecting to the AI service right now. "
             "You can submit an email ticket below and our team will follow up.",

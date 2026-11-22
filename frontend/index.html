@@ -700,6 +700,15 @@
         if (data.messages && data.messages.length) {
           data.messages.forEach(m => {
             if (m.id && !renderedMsgIds.has(m.id)) {
+              if (m.role === "user") {
+                const pendingBubble = Array.from(chatBox.querySelectorAll(".msg.user:not([data-msg-id])"))
+                  .find(el => el.textContent.trim() === (m.content || "").trim());
+                if (pendingBubble) {
+                  pendingBubble.dataset.msgId = m.id;
+                  renderedMsgIds.add(m.id);
+                  return;
+                }
+              }
               renderedMsgIds.add(m.id);
               appendMessage(m.role, m.content, m.sources || [], m.escalated, null, true, m.id, m.feedback);
             }
@@ -723,6 +732,10 @@
     function appendMessage(role, content, sources = [], suggestEscalation = false, actionCard = null, speak = true, msgId = null, existingFb = 0) {
       const div = document.createElement("div");
       div.className = `msg ${role}`;
+      if (msgId) {
+        div.dataset.msgId = msgId;
+        renderedMsgIds.add(msgId);
+      }
 
       if (role === "assistant") {
         const body = document.createElement("div");
@@ -816,6 +829,7 @@
         if (!res.ok) {
           appendMessage("assistant", data.detail || "Request blocked. Please try again.");
         } else {
+          if (data.user_message_id) renderedMsgIds.add(data.user_message_id);
           if (data.message_id) renderedMsgIds.add(data.message_id);
           if (data.human_active !== undefined) {
             isHumanActive = Boolean(data.human_active);

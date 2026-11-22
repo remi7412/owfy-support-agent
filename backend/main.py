@@ -308,7 +308,7 @@ async def chat(req: ChatRequest, request: Request):
             ip_address=request.client.host if request.client else None,
         )
         db.ensure_session(req.session_id, req.visitor_name or "Guest", req.visitor_email or "", tenant_id=tenant_slug)
-        db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
+        user_msg_id = db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
         guardrail_reply = (
             "Security Notice: Your input contains prohibited instructions or prompt override patterns. "
             "Please state your customer support request clearly."
@@ -324,6 +324,7 @@ async def chat(req: ChatRequest, request: Request):
         return {
             "session_id": req.session_id,
             "message_id": msg_id,
+            "user_message_id": user_msg_id,
             "reply": guardrail_reply,
             "sources": [{"title": "Security Guardrail", "category": "Safety"}],
             "suggest_escalation": False,
@@ -335,10 +336,11 @@ async def chat(req: ChatRequest, request: Request):
 
     session = db.get_session(req.session_id)
     if session and session.get("human_active"):
-        db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
+        user_msg_id = db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
         return {
             "session_id": req.session_id,
             "message_id": None,
+            "user_message_id": user_msg_id,
             "reply": "A live specialist has joined your chat session. Your message has been delivered directly to them.",
             "sources": [],
             "suggest_escalation": False,
@@ -376,12 +378,13 @@ async def chat(req: ChatRequest, request: Request):
         tenant_id=tenant_slug,
     )
 
-    db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
+    user_msg_id = db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
     msg_id = db.add_message(req.session_id, "assistant", reply, sources=sources, escalated=should_escalate, tenant_id=tenant_slug)
 
     return {
         "session_id": req.session_id,
         "message_id": msg_id,
+        "user_message_id": user_msg_id,
         "reply": reply,
         "sources": sources,
         "suggest_escalation": should_escalate,
