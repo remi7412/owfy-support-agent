@@ -138,6 +138,8 @@ def init_db() -> None:
         target_id TEXT,
         details TEXT,
         ip_address TEXT,
+        tenant_id TEXT DEFAULT 'default',
+        siem_exported INTEGER DEFAULT 0,
         created_at TEXT NOT NULL
     )
     """)
@@ -154,6 +156,8 @@ def init_db() -> None:
     _ensure_column(cur, "knowledge_docs", "mode_scope", "TEXT DEFAULT 'all'")
     _ensure_column(cur, "sessions", "human_active", "INTEGER DEFAULT 0")
     _ensure_column(cur, "bookings", "voice_dispatched", "INTEGER DEFAULT 0")
+    _ensure_column(cur, "audit_logs", "tenant_id", "TEXT DEFAULT 'default'")
+    _ensure_column(cur, "audit_logs", "siem_exported", "INTEGER DEFAULT 0")
 
     cur.execute("SELECT COUNT(*) FROM tenants")
     if cur.fetchone()[0] == 0:
@@ -778,7 +782,7 @@ def delete_trackable(item_id: int) -> bool:
     return ok
 
 
-# --- Security Audit Trail ---
+# --- Security Audit Trail & SIEM ---
 def add_audit_log(
     admin_user: str,
     action: str,
@@ -786,14 +790,15 @@ def add_audit_log(
     target_id: Optional[str] = None,
     details: Optional[str] = None,
     ip_address: Optional[str] = None,
+    tenant_id: str = "default",
 ) -> Dict[str, Any]:
     conn = get_conn()
     now = utc_now()
     cur = conn.cursor()
     cur.execute(
-        """INSERT INTO audit_logs (admin_user, action, target_type, target_id, details, ip_address, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (admin_user, action, target_type, target_id, details, ip_address, now),
+        """INSERT INTO audit_logs (admin_user, action, target_type, target_id, details, ip_address, tenant_id, siem_exported, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+        (admin_user, action, target_type, target_id, details, ip_address, tenant_id or "default", now),
     )
     log_id = cur.lastrowid
     conn.commit()
@@ -807,6 +812,51 @@ def list_audit_logs(limit: int = 100) -> List[Dict[str, Any]]:
     rows = conn.execute("SELECT * FROM audit_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_unexported_audit_logs(limit: int = 100) -> List[Dict[str, Any]]:
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT * FROM audit_logs WHERE siem_exported = 0 ORDER BY id ASC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_audit_logs_exported(log_ids: List[int]) -> None:
+    if not log_ids:
+        return
+    conn = get_conn()
+    placeholders = ",".join("?" for _ in log_ids)
+    conn.execute(
+        f"UPDATE audit_logs SET siem_exported = 1 WHERE id IN ({placeholders})",
+        tuple(log_ids),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_siem_telemetry() -> Dict[str, Any]:
+    conn = get_conn()
+    cur = conn.cursor()
+    total = cur.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0]
+    unexported = cur.execute("SELECT COUNT(*) FROM audit_logs WHERE siem_exported = 0").fetchone()[0]
+    exported = cur.execute("SELECT COUNT(*) FROM audit_logs WHERE siem_exported = 1").fetchone()[0]
+    last_exported_row = cur.execute(
+        "SELECT created_at FROM audit_logs WHERE siem_exported = 1 ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    last_event_row = cur.execute(
+        "SELECT created_at FROM audit_logs ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    return {
+        "total_logs": total,
+        "unexported_count": unexported,
+        "exported_count": exported,
+        "last_exported_at": last_exported_row[0] if last_exported_row else None,
+        "last_event_at": last_event_row[0] if last_event_row else None,
+    }
 
 
 init_db()

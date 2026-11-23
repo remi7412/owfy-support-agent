@@ -13,6 +13,7 @@ from backend.emailer import send_escalation_email
 from backend.ingest import extract_pdf_content, fetch_website_content
 from backend.llm import generate_support_reply
 from backend.rag import retrieve_relevant_chunks
+from backend.siem_exporter import export_siem_events, flush_siem_events, get_siem_status
 from backend.webhooks import dispatch_webhook
 from backend.security import (
     check_rate_limit,
@@ -233,6 +234,7 @@ def admin_login(payload: LoginRequest, request: Request):
             details="Invalid username or password attempted",
             ip_address=ip,
         )
+        asyncio.create_task(flush_siem_events())
         raise HTTPException(status_code=401, detail="Invalid username or password")
     token = create_access_token(payload.username)
     db.add_audit_log(
@@ -242,6 +244,7 @@ def admin_login(payload: LoginRequest, request: Request):
         details="Admin signed in successfully",
         ip_address=ip,
     )
+    asyncio.create_task(flush_siem_events())
     return {"access_token": token, "token_type": "bearer"}
 
 
@@ -306,7 +309,9 @@ async def chat(req: ChatRequest, request: Request):
             target_id=req.session_id,
             details=f"Blocked prompt injection: {reason}",
             ip_address=request.client.host if request.client else None,
+            tenant_id=tenant_slug,
         )
+        asyncio.create_task(flush_siem_events())
         db.ensure_session(req.session_id, req.visitor_name or "Guest", req.visitor_email or "", tenant_id=tenant_slug)
         user_msg_id = db.add_message(req.session_id, "user", clean_message, tenant_id=tenant_slug)
         guardrail_reply = (
@@ -547,13 +552,24 @@ def get_session_history(session_id: str, _: str = Depends(require_admin)):
 
 
 @app.post("/api/sessions/{session_id}/takeover")
-def toggle_takeover(session_id: str, payload: TakeoverPayload, user: str = Depends(require_admin)):
+def toggle_takeover(session_id: str, payload: TakeoverPayload, request: Request, user: str = Depends(require_admin)):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     db.set_session_human_takeover(session_id, payload.active)
     updated_session = db.get_session(session_id)
-    db.add_audit_log(user, "takeover_toggle", "session", session_id, f"Takeover active={payload.active}")
+    ip = request.client.host if request.client else None
+    tenant = session.get("tenant_id") or "default"
+    db.add_audit_log(
+        admin_user=user,
+        action="takeover_toggle",
+        target_type="session",
+        target_id=session_id,
+        details=f"Takeover active={payload.active}",
+        ip_address=ip,
+        tenant_id=tenant,
+    )
+    asyncio.create_task(flush_siem_events())
     return {"session_id": session_id, "human_active": bool(payload.active), "session": updated_session}
 
 
@@ -827,3 +843,27 @@ def write_settings(payload: SettingsPayload, user: str = Depends(require_admin))
 @app.get("/api/audit-logs")
 def get_audit_logs(limit: int = 100, _: str = Depends(require_admin)):
     return {"logs": db.list_audit_logs(limit=limit)}
+
+
+# --- SIEM Export & Status Endpoints ---
+@app.get("/api/admin/siem/export")
+def get_siem_export(
+    limit: int = 100,
+    format: str = "json",
+    severity: Optional[str] = None,
+    _: str = Depends(require_admin),
+):
+    result = export_siem_events(limit=limit, format=format, severity=severity)
+    if format.strip().lower() == "ndjson":
+        return Response(content=result, media_type="application/x-ndjson")
+    return {"events": result, "count": len(result)}
+
+
+@app.get("/api/admin/siem/status")
+def get_siem_telemetry_status(_: str = Depends(require_admin)):
+    return get_siem_status()
+
+
+@app.post("/api/admin/siem/flush")
+async def trigger_siem_flush(_: str = Depends(require_admin)):
+    return await flush_siem_events()

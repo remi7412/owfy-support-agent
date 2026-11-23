@@ -51,12 +51,38 @@ def verify_access_token(token: str) -> Optional[str]:
         return None
 
 
-def require_admin(authorization: Optional[str] = Header(None)) -> str:
+def require_admin(request: Request, authorization: Optional[str] = Header(None)) -> str:
+    client_ip = request.client.host if request.client else "unknown"
+    path = request.url.path if request.url else "admin_endpoint"
     if not authorization or not authorization.startswith("Bearer "):
+        try:
+            from . import database as db
+            db.add_audit_log(
+                admin_user="unknown",
+                action="admin_auth_failed",
+                target_type="auth",
+                target_id=path,
+                details="Missing or invalid Bearer authorization header",
+                ip_address=client_ip,
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=401, detail="Admin authentication required")
     token = authorization.split(" ", 1)[1].strip()
     user = verify_access_token(token)
     if not user:
+        try:
+            from . import database as db
+            db.add_audit_log(
+                admin_user="unknown",
+                action="admin_auth_failed",
+                target_type="auth",
+                target_id=path,
+                details="Invalid or expired Bearer token",
+                ip_address=client_ip,
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return user
 
@@ -70,6 +96,18 @@ def check_rate_limit(request: Request, bucket: str, max_requests: int = 20, wind
     cutoff = now - window_sec
     recent = [ts for ts in _RATE_BUCKETS[key] if ts > cutoff]
     if len(recent) >= max_requests:
+        try:
+            from . import database as db
+            db.add_audit_log(
+                admin_user="system",
+                action="rate_limit_exceeded",
+                target_type="rate_limit",
+                target_id=bucket,
+                details=f"Rate limit exceeded on bucket {bucket} ({len(recent)} requests in {window_sec}s)",
+                ip_address=client_ip,
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=429, detail="Rate limit exceeded. Please wait a moment and try again.")
     recent.append(now)
     _RATE_BUCKETS[key] = recent

@@ -1,0 +1,78 @@
+<!--
+  Wazuh Custom Ruleset for Owfy Enterprise Support Agent
+  Ingests normalized JSON audit log events from owfy-support-agent
+-->
+<group name="owfy,siem,">
+
+  <!-- Base parent rule for all Owfy Support Agent events -->
+  <rule id="100500" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="source">^owfy-support-agent$</field>
+    <description>Owfy Support Agent audit log event received</description>
+  </rule>
+
+  <!-- 1. Admin Authentication Failure (Single Event) -->
+  <rule id="100501" level="5">
+    <if_sid>100500</if_sid>
+    <field name="event_type">^admin_auth_failed$</field>
+    <description>Owfy: Failed administrator login or unauthorized Bearer token attempt</description>
+    <group>authentication_failed,pci_dss_10.2.4,pci_dss_10.2.5,</group>
+  </rule>
+
+  <!-- High-Severity Alert: Admin Auth Failure Burst (Possible Brute Force) -->
+  <rule id="100502" level="10" frequency="5" timeframe="120">
+    <if_matched_sid>100501</if_matched_sid>
+    <same_field>source_ip</same_field>
+    <description>Owfy Alert: High-severity brute force detected - 5 or more admin authentication failures from $(source_ip) within 120 seconds</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failures,brute_force,</group>
+  </rule>
+
+  <!-- 2. Prompt Injection Attack Blocked (Single Event) -->
+  <rule id="100503" level="6">
+    <if_sid>100500</if_sid>
+    <field name="event_type">^prompt_injection_blocked$</field>
+    <description>Owfy: Prompt injection or adversarial jailbreak attempt blocked by security guardrails</description>
+    <mitre>
+      <id>T1059</id>
+    </mitre>
+    <group>attack,prompt_injection,</group>
+  </rule>
+
+  <!-- High-Severity Alert: Prompt Injection Burst (Active Attack Campaign) -->
+  <rule id="100504" level="10" frequency="3" timeframe="120">
+    <if_matched_sid>100503</if_matched_sid>
+    <same_field>source_ip</same_field>
+    <description>Owfy Alert: High-severity prompt injection burst detected - 3 or more adversarial attack attempts from $(source_ip) within 120 seconds</description>
+    <mitre>
+      <id>T1059</id>
+    </mitre>
+    <group>attack,prompt_injection_burst,</group>
+  </rule>
+
+  <!-- 3. Rate Limit Exceeded -->
+  <rule id="100505" level="6">
+    <if_sid>100500</if_sid>
+    <field name="event_type">^rate_limit_exceeded$</field>
+    <description>Owfy: Client request rate limit exceeded (throttled)</description>
+    <group>rate_limit,</group>
+  </rule>
+
+  <!-- 4. Human Takeover State Toggled -->
+  <rule id="100506" level="4">
+    <if_sid>100500</if_sid>
+    <field name="event_type">^human_takeover_toggled$</field>
+    <description>Owfy: Human agent took over or released chat session</description>
+  </rule>
+
+  <!-- 5. Destructive Admin Action (Deletions) -->
+  <rule id="100507" level="7">
+    <if_sid>100500</if_sid>
+    <field name="action_taken">^deleted$</field>
+    <description>Owfy: Resource deletion performed by admin user $(admin_user)</description>
+    <group>data_deletion,pci_dss_10.2.2,</group>
+  </rule>
+
+</group>
