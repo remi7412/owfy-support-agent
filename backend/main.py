@@ -1,11 +1,12 @@
 import asyncio
 import os
+import time
 from pathlib import Path
 from typing import Dict, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from backend import database as db
@@ -25,6 +26,8 @@ from backend.security import (
 )
 
 load_dotenv()
+
+SERVER_START_TIME = time.time()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
@@ -249,6 +252,34 @@ def admin_login(payload: LoginRequest, request: Request):
 
 
 # --- Public Customer Routes ---
+@app.get("/healthz")
+def healthz():
+    uptime = round(time.time() - SERVER_START_TIME, 2)
+    groq_configured = bool(os.getenv("GROQ_API_KEY", "").strip())
+
+    try:
+        conn = db.get_conn()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "db": f"disconnected: {exc}",
+                "groq_configured": groq_configured,
+                "uptime_seconds": uptime,
+            },
+        )
+
+    return {
+        "status": "ok",
+        "db": "connected",
+        "groq_configured": groq_configured,
+        "uptime_seconds": uptime,
+    }
+
+
 @app.get("/api/health")
 def health_check():
     return {"status": "ok"}

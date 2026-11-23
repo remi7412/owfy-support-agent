@@ -1,0 +1,21 @@
+name: Cold-Start Elimination Keep-Alive
+
+on:
+  schedule:
+    # Runs every 10 minutes from 05:00 to 19:59 UTC (08:00 to 22:59 Doha AST)
+    - cron: '*/10 5-19 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: render-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keepalive:
+    name: Ping Render /healthz
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Owfy Support Agent Health Check
+        run: |
+          echo "Pinging https://owfy-support-agent.onrender.com/healthz to prevent cold start..."
+          curl --silent --show-error --fail --max-time 60 https://owfy-support-agent.onrender.com/healthz

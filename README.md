@@ -102,7 +102,23 @@ Add this single line before the closing `</body>` tag on any webpage:
    - `ADMIN_SECRET`
    - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SUPPORT_EMAIL`
    - `ALLOWED_ORIGINS` (set to `https://<your-render-subdomain>.onrender.com`)
-6. Deploy!
+6. In **Advanced Settings**, configure:
+   - **Health Check Path**: set to `/healthz` (Render checks this unauthenticated, lightweight endpoint during zero-downtime deploys and reboot verification).
+7. Deploy!
+
+### Cold-Start Elimination & 24/7 Zero-Latency Demos
+
+Render free-tier web services spin down after 15 minutes of inactivity. To ensure instant responses and eliminate cold starts during client demos:
+
+1. **Automated GitHub Actions Keep-Alive (`.github/workflows/keepalive.yml`)**:
+   - Automatically scheduled every 10 minutes (`*/10 5-19 * * *` UTC) to keep the instance warm throughout regional daytime and evening hours (08:00 to 23:00 Doha AST).
+   - Can also be triggered manually via GitHub Actions **Run workflow** (`workflow_dispatch`).
+2. **24/7 Uptime Monitoring (Zero-Cold-Start)**:
+   - Configure a free external HTTP monitor (e.g. [UptimeRobot](https://uptimerobot.com/), [BetterStack](https://betterstack.com/), or CronJob.org) targeting:
+     ```
+     https://owfy-support-agent.onrender.com/healthz
+     ```
+   - Set the interval to **5 or 10 minutes** (HTTP HEAD or GET). Because `/healthz` performs an instant in-memory and SQLite `SELECT 1` check without loading Groq or RAG models, it incurs minimal CPU/memory footprint while preventing instance idle spin-down.
 
 ### Option B: Linux VPS with Docker Compose & Nginx / Caddy (HTTPS)
 1. Clone the repository onto your VPS.

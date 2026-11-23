@@ -3,7 +3,6 @@ import re
 from html.parser import HTMLParser
 from typing import Optional, Tuple
 import httpx
-from pypdf import PdfReader
 
 
 class TextExtractor(HTMLParser):
@@ -96,6 +95,7 @@ def extract_pdf_content(pdf_bytes: bytes, filename: Optional[str] = None) -> Tup
     Returns (title, full_text, page_count).
     """
     try:
+        from pypdf import PdfReader
         stream = io.BytesIO(pdf_bytes)
         reader = PdfReader(stream)
     except Exception as exc:
