@@ -87,9 +87,45 @@ def generate_siem_signature(payload_bytes: bytes, secret: str) -> str:
     return hmac.new(secret.encode("utf-8"), payload_bytes, hashlib.sha256).hexdigest()
 
 
+def format_siem_summary(events: List[Dict[str, Any]]) -> str:
+    """
+    Formats a list of normalized audit events into a clean text alert summary
+    for Discord and Slack webhooks, listing severity, event_type, tenant_id,
+    source_ip, session_id, details, and timestamp.
+    """
+    count = len(events)
+    header = f"🚨 **Owfy Security & SIEM Alert: {count} Event{'s' if count != 1 else ''}**"
+    blocks = [header]
+
+    for idx, ev in enumerate(events, 1):
+        sev = (ev.get("severity") or "low").upper()
+        etype = ev.get("event_type") or "audit_event"
+        tenant = ev.get("tenant_id") or "default"
+        ip = ev.get("source_ip") or "unknown"
+        sess = ev.get("session_id") or "N/A"
+        details = ev.get("details") or ""
+        ts = ev.get("timestamp") or ""
+
+        block = (
+            f"**[{idx}] {sev} · {etype}**\n"
+            f"• Tenant: `{tenant}` | IP: `{ip}` | Session: `{sess}`\n"
+            f"• Details: {details}\n"
+            f"• Timestamp: `{ts}`"
+        )
+        blocks.append(block)
+
+    full_text = "\n\n".join(blocks)
+    if len(full_text) > 1950:
+        full_text = full_text[:1900] + "\n\n*(additional events truncated)*"
+    return full_text
+
+
 async def flush_siem_events(batch_size: int = 100) -> Dict[str, Any]:
     """
-    Asynchronously ships unexported audit logs to SIEM_WEBHOOK_URL with HMAC signature.
+    Asynchronously ships unexported audit logs to SIEM_WEBHOOK_URL.
+    Automatically formats payload for Discord ({"content": ...}),
+    Slack ({"text": ...}), or standard SIEM ({"source": ..., "events": [...]})
+    with HMAC-SHA256 signature.
     Fails gracefully without throwing exceptions so it never blocks chat or admin operations.
     """
     webhook_url = os.getenv("SIEM_WEBHOOK_URL", "").strip()
@@ -113,32 +149,44 @@ async def flush_siem_events(batch_size: int = 100) -> Dict[str, Any]:
         return {"status": "idle", "count": 0}
 
     normalized = [normalize_audit_event(row) for row in unexported]
-    payload = {
-        "source": "owfy-support-agent",
-        "batch_count": len(normalized),
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "events": normalized,
-    }
-    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-
-    secret = os.getenv("SIEM_WEBHOOK_SECRET", "").strip()
-    if not secret:
-        try:
-            secret = db.get_settings().get("siem_webhook_secret", "").strip()
-        except Exception:
-            pass
+    url_lower = webhook_url.lower()
 
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "owfy-support-agent/1.0",
     }
-    if secret:
-        sig = generate_siem_signature(payload_bytes, secret)
-        headers["X-Owfy-Signature"] = f"sha256={sig}"
 
-    access_key = os.getenv("SIEM_WEBHOOK_KEY", os.getenv("SIEM_ACCESS_KEY", "")).strip()
-    if access_key:
-        headers["X-Webhook-Access-Key"] = access_key
+    if "discord.com/api/webhooks/" in url_lower or "discordapp.com/api/webhooks/" in url_lower:
+        summary = format_siem_summary(normalized)
+        payload = {"content": summary}
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    elif "hooks.slack.com/" in url_lower:
+        summary = format_siem_summary(normalized)
+        payload = {"text": summary}
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    else:
+        payload = {
+            "source": "owfy-support-agent",
+            "batch_count": len(normalized),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "events": normalized,
+        }
+        payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+        secret = os.getenv("SIEM_WEBHOOK_SECRET", "").strip()
+        if not secret:
+            try:
+                secret = db.get_settings().get("siem_webhook_secret", "").strip()
+            except Exception:
+                pass
+
+        if secret:
+            sig = generate_siem_signature(payload_bytes, secret)
+            headers["X-Owfy-Signature"] = f"sha256={sig}"
+
+        access_key = os.getenv("SIEM_WEBHOOK_KEY", os.getenv("SIEM_ACCESS_KEY", "")).strip()
+        if access_key:
+            headers["X-Webhook-Access-Key"] = access_key
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

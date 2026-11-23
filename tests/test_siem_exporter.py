@@ -25,6 +25,10 @@ client = TestClient(app)
 @pytest.fixture(autouse=True)
 def ensure_db():
     db.init_db()
+    conn = db.get_conn()
+    conn.execute("UPDATE audit_logs SET siem_exported = 1")
+    conn.commit()
+    conn.close()
 
 
 @pytest.fixture
@@ -132,6 +136,123 @@ class TestSiemForwarder:
         monkeypatch.delenv("SIEM_WEBHOOK_URL", raising=False)
         result = asyncio.run(flush_siem_events())
         assert result["status"] == "skipped"
+
+    def test_flush_discord_payload(self, monkeypatch):
+        db.add_audit_log(
+            admin_user="system",
+            action="prompt_injection_blocked",
+            target_type="security",
+            target_id="sess_discord_test",
+            details="Blocked prompt injection attempt",
+            ip_address="192.168.1.50",
+            tenant_id="discord-tenant",
+        )
+
+        monkeypatch.setenv("SIEM_WEBHOOK_URL", "https://discord.com/api/webhooks/mock-channel/mock-token")
+
+        mock_resp = AsyncMock()
+        mock_resp.raise_for_status = lambda: None
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            result = asyncio.run(flush_siem_events(batch_size=10))
+
+            assert result["status"] == "success"
+            assert mock_post.called
+
+            call_kwargs = mock_post.call_args.kwargs
+            posted_data = json.loads(call_kwargs["content"].decode("utf-8"))
+
+            assert "content" in posted_data
+            assert "text" not in posted_data
+            assert "events" not in posted_data
+
+            content = posted_data["content"]
+            assert "HIGH" in content
+            assert "prompt_injection_blocked" in content
+            assert "discord-tenant" in content
+            assert "192.168.1.50" in content
+            assert "sess_discord_test" in content
+            assert "Blocked prompt injection attempt" in content
+            assert "Timestamp:" in content
+
+    def test_flush_slack_payload(self, monkeypatch):
+        db.add_audit_log(
+            admin_user="unknown",
+            action="admin_auth_failed",
+            target_type="auth",
+            target_id="/api/admin/settings",
+            details="Invalid Bearer token signature",
+            ip_address="10.10.10.20",
+            tenant_id="slack-tenant",
+        )
+
+        monkeypatch.setenv("SIEM_WEBHOOK_URL", "https://hooks.slack.com/mock-test-webhook")
+
+        mock_resp = AsyncMock()
+        mock_resp.raise_for_status = lambda: None
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            result = asyncio.run(flush_siem_events(batch_size=10))
+
+            assert result["status"] == "success"
+            assert mock_post.called
+
+            call_kwargs = mock_post.call_args.kwargs
+            posted_data = json.loads(call_kwargs["content"].decode("utf-8"))
+
+            assert "text" in posted_data
+            assert "content" not in posted_data
+            assert "events" not in posted_data
+
+            text = posted_data["text"]
+            assert "HIGH" in text
+            assert "admin_auth_failed" in text
+            assert "slack-tenant" in text
+            assert "10.10.10.20" in text
+            assert "Invalid Bearer token signature" in text
+            assert "Timestamp:" in text
+
+    def test_flush_standard_siem_payload(self, monkeypatch):
+        db.add_audit_log(
+            admin_user="system",
+            action="rate_limit_exceeded",
+            target_type="rate_limit",
+            target_id="chat",
+            details="Rate limit exceeded on chat bucket",
+            ip_address="172.16.1.1",
+            tenant_id="default",
+        )
+
+        monkeypatch.setenv("SIEM_WEBHOOK_URL", "https://siem.test.local/receiver")
+        monkeypatch.setenv("SIEM_WEBHOOK_SECRET", "siem-sec")
+
+        mock_resp = AsyncMock()
+        mock_resp.raise_for_status = lambda: None
+
+        with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            mock_post.return_value = mock_resp
+            result = asyncio.run(flush_siem_events(batch_size=10))
+
+            assert result["status"] == "success"
+            assert result["exported"] >= 1
+            assert mock_post.called
+
+            call_kwargs = mock_post.call_args.kwargs
+            posted_data = json.loads(call_kwargs["content"].decode("utf-8"))
+
+            assert posted_data.get("source") == "owfy-support-agent"
+            assert "batch_count" in posted_data
+            assert "events" in posted_data
+            assert isinstance(posted_data["events"], list)
+            assert "content" not in posted_data
+            assert "text" not in posted_data
+
+            # Check HMAC header
+            headers = call_kwargs["headers"]
+            assert "X-Owfy-Signature" in headers
+            assert headers["X-Owfy-Signature"].startswith("sha256=")
 
     def test_flush_success(self, monkeypatch):
         # Insert test audit log
