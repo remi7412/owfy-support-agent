@@ -66,15 +66,39 @@ jobs:
           PROMPTFOO_DISABLE_TELEMETRY: "1"
           OWFY_API_URL: "http://127.0.0.1:8000/api/chat"
         run: |
+          set +e
           npx promptfoo@latest redteam run \
             --config promptfooconfig.yaml \
             --output redteam-results.json \
             --max-concurrency 3
+          REDTEAM_EXIT=$?
+          set -e
 
+          # Exit code 100 indicates test assertions/findings, not an execution crash
+          if [ $REDTEAM_EXIT -ne 0 ] && [ $REDTEAM_EXIT -ne 100 ]; then
+            echo "::error::Promptfoo redteam run failed with crash exit code $REDTEAM_EXIT"
+            exit $REDTEAM_EXIT
+          fi
+          echo "Promptfoo redteam run finished with exit code $REDTEAM_EXIT."
+
+          if [ ! -f redteam-results.json ]; then
+            echo "::error::redteam-results.json was not generated"
+            exit 1
+          fi
+
+          set +e
           npx promptfoo@latest eval \
             --config promptfooconfig.yaml \
             --output regression-results.json \
             --max-concurrency 3
+          EVAL_EXIT=$?
+          set -e
+
+          if [ $EVAL_EXIT -ne 0 ] && [ $EVAL_EXIT -ne 100 ]; then
+            echo "::error::Promptfoo eval failed with crash exit code $EVAL_EXIT"
+            exit $EVAL_EXIT
+          fi
+          echo "Promptfoo eval finished with exit code $EVAL_EXIT."
 
       - name: Upload security evaluation reports
         if: always()
